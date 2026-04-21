@@ -1,0 +1,8 @@
+# HelpAI — dependencies
+openai>=1.30.0
+SoundCard>=0.4.3
+numpy>=1.24.0
+mss>=9.0.0
+Pillow>=10.0.0
+keyboard>=0.13.5
+pywin32>=306
