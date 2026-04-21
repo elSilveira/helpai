@@ -55,12 +55,14 @@ def _get_model():
     return _model
 
 
-def transcribe_local(audio: np.ndarray, sample_rate: int = 16000) -> str:
+def transcribe_local(audio: np.ndarray, sample_rate: int = 16000, language: str = "en") -> str:
     """Transcribe a numpy audio array using the local Whisper model.
 
     Args:
         audio: float32 numpy array of audio samples (mono, 16kHz expected).
         sample_rate: Sample rate of the audio.
+        language: BCP-47 language code passed to Whisper (e.g. 'en', 'es').  Use
+            empty string or None to enable Whisper's own language auto-detection.
 
     Returns:
         Transcribed text, or empty string if silence/hallucination.
@@ -78,30 +80,36 @@ def transcribe_local(audio: np.ndarray, sample_rate: int = 16000) -> str:
     if rms < 0.01:
         return ""
 
+    _lang = (language or "").strip() or None  # None → Whisper auto-detect
+
+    # Hotwords are English tech terms; only inject when transcribing English.
+    _hotwords = (
+        "TypeScript JavaScript React Python API GraphQL REST Docker "
+        "Kubernetes AWS database SQL Node.js Git CI/CD deployment "
+        "microservices frontend backend endpoint component"
+    ) if (_lang is None or _lang.startswith("en")) else None
+
     model = _get_model()
     with _transcribe_lock:
-        segments, info = model.transcribe(
-            audio,
+        transcribe_kwargs = dict(
             beam_size=3,
-            language="en",
+            language=_lang,
             condition_on_previous_text=False,
             no_speech_threshold=0.6,
             log_prob_threshold=-1.0,
-            compression_ratio_threshold=1.8,      # stricter than default 2.4 — catches hallucinated repetition
-            repetition_penalty=1.5,               # penalize repeated tokens
-            no_repeat_ngram_size=3,               # block repeated 3-grams
-            hallucination_silence_threshold=1.0,  # skip segments in silence gaps >1s
+            compression_ratio_threshold=1.8,
+            repetition_penalty=1.5,
+            no_repeat_ngram_size=3,
+            hallucination_silence_threshold=1.0,
             vad_filter=True,
             vad_parameters=dict(
                 min_silence_duration_ms=300,
                 speech_pad_ms=250,
             ),
-            hotwords=(
-                "TypeScript JavaScript React Python API GraphQL REST Docker "
-                "Kubernetes AWS database SQL Node.js Git CI/CD deployment "
-                "microservices frontend backend endpoint component"
-            ),
         )
+        if _hotwords:
+            transcribe_kwargs["hotwords"] = _hotwords
+        segments, info = model.transcribe(audio, **transcribe_kwargs)
 
     parts = []
     for seg in segments:

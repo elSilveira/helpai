@@ -730,6 +730,28 @@ class OverlayApp:
         _combo_row("Microphone Device", "AUDIO_INPUT_DEVICE_ID", list_microphone_choices(), width=28)
         _combo_row("Loopback Output", "AUDIO_OUTPUT_DEVICE_ID", list_speaker_choices(), width=28)
 
+        _section("Speech-to-Text", "🎤")
+        _combo_row("Provider", "STT_PROVIDER", ["auto", "local", "xai"])
+        _combo_row(
+            "Language", "STT_LANGUAGE",
+            [
+                ("Auto-detect", ""),
+                ("English", "en"),
+                ("Portuguese", "pt"),
+                ("Spanish", "es"),
+                ("French", "fr"),
+                ("German", "de"),
+                ("Italian", "it"),
+                ("Japanese", "ja"),
+                ("Chinese (Simplified)", "zh"),
+                ("Korean", "ko"),
+                ("Arabic", "ar"),
+                ("Russian", "ru"),
+                ("Hindi", "hi"),
+            ],
+            width=22,
+        )
+
         _section("Appearance", "🎨")
         _slider_row("Overlay Opacity", "INSIGHT_OVERLAY_OPACITY", 0.1, 1.0)
 

@@ -109,7 +109,7 @@ class SettingsWindow:
         self.root.configure(bg=_BASE)
         self.root.resizable(False, False)
 
-        w, h = 520, 590
+        w, h = 520, 740
         sx = (self.root.winfo_screenwidth() - w) // 2
         sy = (self.root.winfo_screenheight() - h) // 2
         self.root.geometry(f"{w}x{h}+{sx}+{sy}")
@@ -145,8 +145,30 @@ class SettingsWindow:
         _make_draggable(self.root, title_frame, title_label)
         tk.Frame(self.root, bg=_SURFACE1, height=1).pack(fill=tk.X)
 
-        content = tk.Frame(self.root, bg=_BASE)
-        content.pack(fill=tk.BOTH, expand=True)
+        _scroll_canvas = tk.Canvas(self.root, bg=_BASE, highlightthickness=0, bd=0)
+        _scrollbar = tk.Scrollbar(
+            self.root, orient=tk.VERTICAL, command=_scroll_canvas.yview,
+        )
+        _scroll_canvas.configure(yscrollcommand=_scrollbar.set)
+        _scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        _scroll_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        content = tk.Frame(_scroll_canvas, bg=_BASE)
+        _cw = _scroll_canvas.create_window((0, 0), window=content, anchor="nw")
+
+        def _on_content_resize(e):
+            _scroll_canvas.configure(scrollregion=_scroll_canvas.bbox("all"))
+
+        def _on_canvas_resize(e):
+            _scroll_canvas.itemconfig(_cw, width=e.width)
+
+        def _on_wheel(e):
+            _scroll_canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
+
+        content.bind("<Configure>", _on_content_resize)
+        _scroll_canvas.bind("<Configure>", _on_canvas_resize)
+        _scroll_canvas.bind("<Enter>", lambda e: _scroll_canvas.bind_all("<MouseWheel>", _on_wheel))
+        _scroll_canvas.bind("<Leave>", lambda e: _scroll_canvas.unbind_all("<MouseWheel>"))
 
         self._section(content, "Hotkeys", "⌨")
         self._hotkey_row(content, "Audio Analysis", "HOTKEY_AUDIO_ANALYSIS", font)
@@ -162,6 +184,28 @@ class SettingsWindow:
         self._combo_row(content, "Audio Source", "AUDIO_SOURCE", font, ["other", "me", "both"])
         self._combo_row(content, "Microphone Device", "AUDIO_INPUT_DEVICE_ID", font, list_microphone_choices(), width=28)
         self._combo_row(content, "Loopback Output", "AUDIO_OUTPUT_DEVICE_ID", font, list_speaker_choices(), width=28)
+
+        self._section(content, "Speech-to-Text", "🎤")
+        self._combo_row(content, "Provider", "STT_PROVIDER", font, ["auto", "local", "xai"])
+        self._combo_row(
+            content, "Language", "STT_LANGUAGE", font,
+            [
+                ("Auto-detect", ""),
+                ("English", "en"),
+                ("Portuguese", "pt"),
+                ("Spanish", "es"),
+                ("French", "fr"),
+                ("German", "de"),
+                ("Italian", "it"),
+                ("Japanese", "ja"),
+                ("Chinese (Simplified)", "zh"),
+                ("Korean", "ko"),
+                ("Arabic", "ar"),
+                ("Russian", "ru"),
+                ("Hindi", "hi"),
+            ],
+            width=22,
+        )
 
         self._section(content, "Appearance", "🎨")
         self._slider_row(content, "Overlay Opacity", "INSIGHT_OVERLAY_OPACITY", font, 0.1, 1.0)

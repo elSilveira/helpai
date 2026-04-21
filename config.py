@@ -24,6 +24,7 @@ OPENAI_MODEL = _user.get("OPENAI_MODEL") or os.environ.get("OPENAI_MODEL", "gpt-
 XAI_API_KEY = _user.get("XAI_API_KEY") or os.environ.get("XAI_API_KEY", "")
 STT_PROVIDER = (_user.get("STT_PROVIDER") or os.environ.get("STT_PROVIDER", "auto")).strip().lower()
 XAI_STT_ENDPOINT = os.environ.get("XAI_STT_ENDPOINT", "https://api.x.ai/v1/stt")
+STT_LANGUAGE = _user.get("STT_LANGUAGE", "en")
 XAI_STT_LANGUAGE = _user.get("XAI_STT_LANGUAGE", "en")
 XAI_STT_FORMAT_TEXT = _user.get("XAI_STT_FORMAT_TEXT", True)
 XAI_STT_TIMEOUT_SECONDS = int(_user.get("XAI_STT_TIMEOUT_SECONDS", 30))

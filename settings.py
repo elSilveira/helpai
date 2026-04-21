@@ -42,10 +42,10 @@ SETTINGS_FILE = _base_dir / "settings.json"
 
 # Keys that can be customised by the user
 DEFAULTS = {
-    "HOTKEY_AUDIO_ANALYSIS": "ctrl+d",
-    "HOTKEY_SCREENSHOT_FEEDBACK": "ctrl+e",
+    "HOTKEY_AUDIO_ANALYSIS": "ctrl+shift+d",
+    "HOTKEY_SCREENSHOT_FEEDBACK": "ctrl+shift+e",
     "HOTKEY_QUICK_INPUT": "ctrl+shift+enter",
-    "HOTKEY_SHOW_CONVERSATION": "ctrl+s",
+    "HOTKEY_SHOW_CONVERSATION": "ctrl+shift+s",
     "AUDIO_CAPTURE_ENABLED": True,
     "SCREENSHOT_FEEDBACK_ENABLED": True,
     "INSIGHT_OVERLAY_OPACITY": 0.88,
@@ -56,6 +56,7 @@ DEFAULTS = {
     "OPENAI_MODEL": "gpt-4o",
     "STT_PROVIDER": "auto",
     "XAI_API_KEY": "",
+    "STT_LANGUAGE": "en",
     "XAI_STT_LANGUAGE": "en",
     "XAI_STT_FORMAT_TEXT": True,
     "XAI_STT_TIMEOUT_SECONDS": 30,
