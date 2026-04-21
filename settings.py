@@ -1,8 +1,8 @@
 """
 User-editable settings persistence.
 
-Stores settings as a JSON file next to the executable / script.
-Falls back to defaults from config.py when the file does not exist.
+Stores settings next to the executable for frozen builds, keeps repo-local
+settings during development, and uses %APPDATA%\\HelpAI for pip-installed copies.
 """
 
 import json
@@ -13,12 +13,30 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-# In a PyInstaller bundle, __file__ points to _MEIPASS (temp dir).
-# Use the exe's directory so settings persist across restarts.
-if getattr(sys, "frozen", False):
-    _base_dir = Path(sys.executable).parent
-else:
-    _base_dir = Path(__file__).parent
+
+def _is_installed_copy(base_dir: Path) -> bool:
+    return any(part.lower() in {"site-packages", "dist-packages"} for part in base_dir.parts)
+
+
+def _resolve_base_dir() -> Path:
+    override = os.environ.get("HELPAI_SETTINGS_DIR", "").strip()
+    if override:
+        return Path(override).expanduser()
+
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).parent
+
+    module_dir = Path(__file__).resolve().parent
+    if _is_installed_copy(module_dir):
+        appdata = os.environ.get("APPDATA", "").strip()
+        if appdata:
+            return Path(appdata) / "HelpAI"
+        return Path.home() / ".helpai"
+
+    return module_dir
+
+
+_base_dir = _resolve_base_dir()
 
 SETTINGS_FILE = _base_dir / "settings.json"
 
@@ -27,16 +45,24 @@ DEFAULTS = {
     "HOTKEY_AUDIO_ANALYSIS": "ctrl+d",
     "HOTKEY_SCREENSHOT_FEEDBACK": "ctrl+e",
     "HOTKEY_QUICK_INPUT": "ctrl+shift+enter",
+    "HOTKEY_SHOW_CONVERSATION": "ctrl+s",
     "AUDIO_CAPTURE_ENABLED": True,
     "SCREENSHOT_FEEDBACK_ENABLED": True,
     "INSIGHT_OVERLAY_OPACITY": 0.88,
     "AUDIO_CHUNK_DURATION": 30,
     "AUDIO_RING_BUFFER_SECONDS": 120,
+    "TRANSCRIPTION_INTERVAL": 3,
     "OPENAI_API_KEY": "",
     "OPENAI_MODEL": "gpt-4o",
+    "STT_PROVIDER": "auto",
+    "XAI_API_KEY": "",
+    "XAI_STT_LANGUAGE": "en",
+    "XAI_STT_FORMAT_TEXT": True,
+    "XAI_STT_TIMEOUT_SECONDS": 30,
     "AUDIO_SOURCE": "other",
     "AUDIO_INPUT_DEVICE_ID": "",
     "AUDIO_OUTPUT_DEVICE_ID": "",
+    "LOCAL_WHISPER_MODEL": "small.en",
 }
 
 _cache: dict | None = None
@@ -63,6 +89,7 @@ def save(settings: dict) -> None:
     global _cache
     # Only save keys that differ from hard defaults or are user-editable
     to_save = {k: v for k, v in settings.items() if k in DEFAULTS}
+    SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
     with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
         json.dump(to_save, f, indent=2)
     _cache = dict(DEFAULTS)

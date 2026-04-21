@@ -1,0 +1,16 @@
+analyzer
+audio_capture
+config
+create_shortcut
+helpai
+helpai_version
+launcher
+local_transcriber
+main
+overlay
+screenshot
+settings
+settings_ui
+speech_to_text
+transcript_filters
+visibility

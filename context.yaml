@@ -1,58 +1,58 @@
-project_name: HelpAI
-description: A lightweight Windows overlay application for internal quality-assurance sessions, UX evaluations, and engineering training workflows.
-features:
-  - name: Audio Analysis
-    hotkey: Ctrl+D
-    description: Records microphone/system audio, transcribes it locally, and generates QA insights via OpenAI.
-  - name: Screenshot Feedback
-    hotkey: Ctrl+E
-    description: Captures screen, analyzes with GPT-4o vision, returns context-aware notes.
-  - name: Quick Input
-    hotkey: Ctrl+Shift+Enter
-    description: Opens a text prompt for ad-hoc questions or note logging.
-  - name: Capture-excluded overlay
-    description: Uses SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE) so the overlay does not pollute screen recordings or broadcasts.
-  - name: Semi-transparent draggable UI
-    description: Always-on-top borderless window using Tkinter.
-  - name: Settings UI
-    description: Provides an interface to manage settings like API keys and devices.
-
-stack:
-  language: Python
-  ui_framework: Tkinter (Built-in)
-  audio: SoundCard
-  image_capture: mss
-  keybindings: keyboard
-  ai_integration:
-    - openai (GPT-4o)
-    - local_transcriber (Whisper via openai API or local)
-  system_integration: pywin32 (for WDA_EXCLUDEFROMCAPTURE)
-  packaging: PyInstaller (via build.py)
-
-core_files:
-  main.py: Entry point, initializes the overlay, binds hotkeys, and runs the Tkinter main loop.
-  overlay.py: Contains the OverlayUI class for rendering the floating interface.
-  config.py: Default configuration variables (SCREAMING_SNAKE_CASE).
-  settings.py: Manages loading and saving settings to settings.json.
-  settings_ui.py: The GUI window for letting users change settings.
-  audio_capture.py: Handles reading audio devices and capturing microphone/speaker audio.
-  local_transcriber.py: Handles transcribing recorded audio to text.
-  screenshot.py: Captures the screen using mss.
-  analyzer.py: Contains the logic to call OpenAI APIs for generating insights from text and images.
-  visibility.py: Provides platform-specific windows API calls to make the window exclude from capture.
-  launcher.py: Alternative entry point or process wrapper.
-  build.py: Script to run PyInstaller and package the app.
-
-dependencies:
-  - openai>=1.30.0
-  - SoundCard>=0.4.3
-  - numpy>=1.24.0
-  - mss>=9.0.0
-  - Pillow>=10.0.0
-  - keyboard>=0.13.5
-  - pywin32>=306
-
-build_instructions:
-  - Run `install.bat` to install dependencies and create venv.
-  - Run `build.py` to package the executable via PyInstaller into `dist/HelpAI.exe`.
-  - Use `run.bat` for typical development runs.
+files:
+  stt_router: speech_to_text.py
+  local_stt_backend: local_transcriber.py
+  transcript_filters: transcript_filters.py
+  settings_store: settings.py
+  runtime_config: config.py
+  standalone_settings_ui: settings_ui.py
+  in_app_settings_ui: overlay.py
+  launcher_entrypoint: launcher.py
+  capture_pipeline: audio_capture.py
+  app_entrypoint: main.py
+  analyzer_integration: analyzer.py
+validators:
+  - only keys present in DEFAULTS are persisted to settings.json  [settings.py @save]
+  - provider names must normalize to auto/local/xai; unknown values fall back to auto  [speech_to_text.py @_normalize_provider_name]
+  - xAI multipart language is only written when XAI_STT_LANGUAGE.strip() is non-empty; format=true is additionally gated by XAI_STT_FORMAT_TEXT inside that same branch  [speech_to_text.py @_build_xai_request_body]
+  - xAI transcription raises if XAI_API_KEY is not configured  [speech_to_text.py @_transcribe_with_xai]
+  - local faster-whisper currently hard-codes language='en'  [local_transcriber.py @transcribe_local]
+  - local faster-whisper returns an empty transcript when rms < 0.01  [local_transcriber.py @transcribe_local]
+  - shared transcript filtering removes known hallucination phrases and outputs with <=3 non-punctuation characters  [transcript_filters.py @filter_transcript_text]
+  - real-time transcription callback shape is callable(audio_frames, sample_rate) -> str  [audio_capture.py @ContinuousCapture.__init__]
+architecture:
+  pattern: desktop Python app with a launcher, Tkinter overlay UI, continuous audio capture via SoundCard/WASAPI loopback, analyzer module, and STT backends routed through speech_to_text.py
+  settings: settings.py merges settings.json with DEFAULTS; config.py imports settings.load() once, derives SCREAMING_SNAKE_CASE constants, and overlays selected values with environment variables where defined
+naming_conventions:
+  settings: SCREAMING_SNAKE_CASE
+  python_modules: snake_case
+  classes: PascalCase
+business_rules:
+  - STT_PROVIDER=auto resolves to xai when XAI_API_KEY is set, otherwise local faster-whisper.
+  - When provider='auto', xAI failures fall back to local faster-whisper; explicit provider selection does not use that fallback path.
+  - The public STT entry points are transcribe_audio_array(audio, sample_rate, provider=None) and transcribe_wav_bytes(wav_bytes, provider=None); neither currently accepts a language argument.
+  - xAI uses the persisted XAI_STT_LANGUAGE hint, but local transcription is English-biased through both LOCAL_WHISPER_MODEL default 'small.en' and language='en'.
+  - local_transcriber.transcribe_local() also passes English technical hotwords to Whisper.
+  - launcher.py opens settings_ui.SettingsWindow before main.py starts, but the in-app overlay settings panel in overlay.py does not render any STT fields.
+  - LOCAL_WHISPER_MODEL is persisted in settings.DEFAULTS/config.py but is not editable in either settings_ui.py or overlay.py.
+  - overlay.py tells users to restart after saving settings; config.py loads runtime settings at import time.
+worked_examples:
+  - input: {STT_PROVIDER: auto, XAI_API_KEY: present}
+    output: {active_provider: xai}
+    note: get_active_stt_provider() prefers xAI in auto mode when an xAI key exists
+  - input: {STT_PROVIDER: auto, XAI_API_KEY: ""}
+    output: {active_provider: local}
+    note: get_active_stt_provider() falls back to local when no xAI key is configured
+  - input: {XAI_STT_LANGUAGE: es, XAI_STT_FORMAT_TEXT: true}
+    output: {xai_form_fields: [format=true, language=es]}
+    note: _build_xai_request_body() emits both fields only when the trimmed language hint is non-empty and format_text is enabled
+edge_cases:
+  - scenario: XAI_STT_LANGUAGE is blank or whitespace
+    expected: speech_to_text._build_xai_request_body() omits both the language field and the nested format=true field.
+  - scenario: STT_PROVIDER contains an unknown value
+    expected: speech_to_text._normalize_provider_name() falls back to 'auto', then get_active_stt_provider() resolves to xai if XAI_API_KEY exists or local otherwise.
+  - scenario: provider='auto' and the xAI request fails
+    expected: speech_to_text.transcribe_audio_array() and transcribe_wav_bytes() log the exception and retry with local faster-whisper.
+  - scenario: user changes STT settings while the overlay app is already running
+    expected: settings are saved, but overlay.py explicitly asks for a restart and config.py keeps previously imported values until the process restarts.
+  - scenario: user opens the in-app settings panel to change transcription language
+    expected: overlay.py currently exposes no STT section, so language can only be edited through the standalone launcher settings window.

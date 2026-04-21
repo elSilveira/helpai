@@ -1,7 +1,7 @@
 @echo off
 set "APP_VERSION=unknown"
-if exist "%~dp0config.py" (
-    for /f "usebackq delims=" %%V in (`powershell -NoProfile -Command "$match = Select-String -Path '%~dp0config.py' -Pattern '^\s*APP_VERSION\s*=\s*\"([^\"]+)\"'; if ($match) { $match.Matches[0].Groups[1].Value } else { 'unknown' }"`) do set "APP_VERSION=%%V"
+if exist "%~dp0helpai_version.py" (
+    for /f "tokens=2 delims== " %%V in ('findstr /r "^__version__ *= *\".*\"" "%~dp0helpai_version.py"') do set "APP_VERSION=%%~V"
 )
 title HelpAI v%APP_VERSION% — Quick Run
 echo ============================================

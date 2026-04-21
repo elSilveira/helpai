@@ -2,18 +2,19 @@
 AI Analyzer module.
 
 Wraps the OpenAI API for:
-  • Audio transcription (Whisper)
-  • Text-based insight generation (GPT-4o)
-  • Vision-based screenshot analysis (GPT-4o vision)
+    • Text-based insight generation (GPT-4o)
+    • Vision-based screenshot analysis (GPT-4o vision)
+    • Speech-to-text via the configured transcription backend
 """
 
 import base64
-import io
 import logging
 
 from openai import OpenAI
 
-from config import OPENAI_API_KEY, OPENAI_MODEL, WHISPER_MODEL
+from config import OPENAI_API_KEY, OPENAI_MODEL
+from screenshot import prepare_vision_views
+from speech_to_text import transcribe_wav_bytes
 
 logger = logging.getLogger(__name__)
 
@@ -34,89 +35,9 @@ def _get_client() -> OpenAI:
 
 # ── Audio → Text ────────────────────────────────────────────────────────────
 
-# Known Whisper silence hallucinations (multi-language).
-# These appear when Whisper receives near-silent audio.
-_HALLUCINATION_EXACT: set[str] = {
-    # English
-    "thank you", "thank you.", "thanks.", "thanks",
-    "thank you for watching", "thank you for watching.",
-    "thanks for watching", "thanks for watching.",
-    "like and subscribe", "please subscribe",
-    "subscribe", "bye.", "bye", "you",
-    # Japanese
-    "ご視聴ありがとうございました", "ご視聴ありがとうございました。",
-    # Chinese
-    "谢谢观看", "谢谢观看。", "字幕由amara.org社区提供",
-    "请不吝点赞 订阅 转发 打赏支持明镜与点点栏目",
-    # Korean
-    "시청해주셔서 감사합니다", "시청해 주셔서 감사합니다",
-    # Italian / Spanish / Portuguese / German / French
-    "grazie", "grazie.", "grazie per la visione",
-    "gracias", "gracias.", "gracias por ver",
-    "obrigado", "obrigado.", "obrigada.",
-    "danke", "danke.", "danke fürs zuschauen",
-    "merci", "merci.", "merci d'avoir regardé",
-    # Arabic
-    "شكرا للمشاهدة",
-    # Common filler
-    "!", ".", "...", "…", "♪", "♪♪", "♪♪♪",
-    "music", "[music]", "(music)",
-}
-
-_HALLUCINATION_PATTERNS: list[str] = [
-    r'\bthanks? for watching\b',
-    r'\bplease subscribe\b',
-    r'\blike and subscribe\b',
-    r'\bsubscribe\b',
-    r'ご視聴ありがとうございました',
-    r'谢谢观看',
-    r'시청해\s*주셔서\s*감사합니다',
-    r'\bgrazie\b',
-    r'\bmerci\b',
-    r'♪+',
-    r'\[music\]',
-    r'\(music\)',
-]
-
-
-def _filter_hallucinations(text: str) -> str:
-    """Remove Whisper hallucination artifacts (repeated filler words on silence)."""
-    import re
-
-    # 1. Exact match — if the *entire* transcript is a known hallucination, drop it
-    if text.strip().lower() in {h.lower() for h in _HALLUCINATION_EXACT}:
-        return ""
-
-    # 2. Collapse 3+ consecutive identical words ("you you you you" → "")
-    text = re.sub(r'\b(\w+)(\s+\1){2,}\b', '', text, flags=re.IGNORECASE)
-
-    # 3. Remove known hallucination phrases anywhere in the text
-    for pat in _HALLUCINATION_PATTERNS:
-        text = re.sub(pat, '', text, flags=re.IGNORECASE)
-
-    # 4. Clean up extra whitespace
-    text = re.sub(r'\s{2,}', ' ', text).strip()
-
-    # 5. If what remains is ≤ 3 non-space characters, it's likely noise
-    stripped = re.sub(r'[\s.,!?;:\-–—…]+', '', text)
-    if len(stripped) <= 3:
-        return ""
-
-    return text
-
-
 def transcribe_audio(wav_bytes: bytes) -> str:
-    """Send WAV audio to Whisper and return the transcript."""
-    client = _get_client()
-    audio_file = io.BytesIO(wav_bytes)
-    audio_file.name = "recording.wav"
-    response = client.audio.transcriptions.create(
-        model=WHISPER_MODEL,
-        file=audio_file,
-        response_format="text",
-    )
-    transcript = response.strip() if isinstance(response, str) else str(response)
-    transcript = _filter_hallucinations(transcript)
+    """Transcribe WAV audio using the configured speech-to-text backend."""
+    transcript = transcribe_wav_bytes(wav_bytes)
     logger.info("Transcription complete (%d chars).", len(transcript))
     return transcript
 
@@ -180,6 +101,9 @@ VISION_PROMPT = (
     "You are ghostwriting MY personal response to what's on this screen. "
     "Write in first person as if I am the one speaking. Read EVERYTHING on screen "
     "carefully — every line of code, every question, every error, every diagram.\n\n"
+    "You may receive multiple images of the same screen: the first is a full-screen overview, "
+    "and the remaining images are zoomed crops in reading order. Use the overview for layout and "
+    "global context, and use the crops whenever text or code is small.\n\n"
     "FIRST: Identify the programming language, framework, and technology stack visible "
     "on screen (e.g. Python/Django, JavaScript/React, TypeScript/Next.js, Java/Spring, "
     "C#/.NET, SQL, Terraform, Docker, etc.). Your response MUST use that exact language "
@@ -200,31 +124,54 @@ VISION_PROMPT = (
 )
 
 
-def analyze_screenshot(png_bytes: bytes) -> str:
+def analyze_screenshot(image_bytes: bytes) -> str:
     """Send a screenshot to the vision model and return insights."""
     client = _get_client()
-    b64_image = base64.b64encode(png_bytes).decode("utf-8")
+    views = prepare_vision_views(image_bytes)
+    content: list[dict] = [{"type": "text", "text": VISION_PROMPT}]
+
+    if len(views) > 1:
+        content.append(
+            {
+                "type": "text",
+                "text": (
+                    "Image guide: image 1 is the full-screen overview. The remaining images are "
+                    "native-resolution crops ordered left-to-right, top-to-bottom."
+                ),
+            }
+        )
+
+    for index, view in enumerate(views, start=1):
+        detail = "high" if len(views) == 1 or index > 1 else "low"
+        b64_image = base64.b64encode(view["bytes"]).decode("utf-8")
+        content.append(
+            {
+                "type": "text",
+                "text": f"View {index}: {view['label']} ({view['width']}x{view['height']}).",
+            }
+        )
+        content.append(
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:{view['mime_type']};base64,{b64_image}",
+                    "detail": detail,
+                },
+            }
+        )
+
     response = client.chat.completions.create(
         model=OPENAI_MODEL,
         messages=[
             {
                 "role": "user",
-                "content": [
-                    {"type": "text", "text": VISION_PROMPT},
-                    {
-                        "type": "image_url",
-                        "image_url": {
-                            "url": f"data:image/png;base64,{b64_image}",
-                            "detail": "high",
-                        },
-                    },
-                ],
+                "content": content,
             }
         ],
         max_tokens=4096,
     )
     content = response.choices[0].message.content or ""
-    logger.info("Screenshot analysis complete.")
+    logger.info("Screenshot analysis complete using %d view(s).", len(views))
     return content.strip()
 
 

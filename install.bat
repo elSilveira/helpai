@@ -1,7 +1,7 @@
 @echo off
 set "APP_VERSION=unknown"
-if exist "%~dp0config.py" (
-    for /f "usebackq delims=" %%V in (`powershell -NoProfile -Command "$match = Select-String -Path '%~dp0config.py' -Pattern '^\s*APP_VERSION\s*=\s*\"([^\"]+)\"'; if ($match) { $match.Matches[0].Groups[1].Value } else { 'unknown' }"`) do set "APP_VERSION=%%V"
+if exist "%~dp0helpai_version.py" (
+    for /f "tokens=2 delims== " %%V in ('findstr /r "^__version__ *= *\".*\"" "%~dp0helpai_version.py"') do set "APP_VERSION=%%~V"
 )
 title HelpAI Installer v%APP_VERSION%
 echo ============================================
@@ -31,7 +31,7 @@ set "SOURCE_DIR=%~dp0"
 :: Check HelpAI.exe exists in source
 if not exist "%SOURCE_DIR%HelpAI.exe" (
     echo [ERROR] HelpAI.exe not found in %SOURCE_DIR%
-    echo         Run build.py first to create the executable.
+    echo         Run build.bat or build_exe.py first to create the executable.
     pause
     exit /b 1
 )

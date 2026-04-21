@@ -1,8 +1,8 @@
 """
-Build script — creates a standalone HelpAI.exe using PyInstaller.
+Build script - creates a standalone HelpAI.exe using PyInstaller.
 
 Usage:
-    python build.py
+    python build_exe.py
 
 Output:
     dist/HelpAI/HelpAI.exe   (one-folder bundle, ready to distribute)
@@ -51,6 +51,8 @@ DATA_FILES = [
 # Check if icon exists
 ICON = ROOT / "icon.ico"
 ICON_ARG = str(ICON) if ICON.exists() else None
+
+
 def ensure_pyinstaller():
     """Install PyInstaller if not present."""
     try:
@@ -70,8 +72,8 @@ def build():
         sys.executable, "-m", "PyInstaller",
         "--name", "HelpAI",
         "--onedir",
-        "--noconsole",                      # no terminal window
-        "--noconfirm",                      # overwrite without asking
+        "--noconsole",
+        "--noconfirm",
         "--clean",
         "--distpath", str(DIST),
         "--workpath", str(BUILD),
@@ -87,7 +89,6 @@ def build():
     if ICON_ARG:
         cmd += ["--icon", ICON_ARG]
 
-    # Collect all project .py files as data so settings/config are bundled
     project_files = [
         "config.py", "settings.py", "settings_ui.py", "analyzer.py",
         "audio_capture.py", "screenshot.py", "overlay.py", "visibility.py",
@@ -118,9 +119,9 @@ def build():
         print("=" * 50)
         print()
         print("  To distribute: zip the dist/HelpAI/ folder.")
-        print("  Users just run HelpAI.exe — no Python needed.")
+        print("  Users just run HelpAI.exe - no Python needed.")
     else:
-        print("[ERROR] Build failed — exe not found.")
+        print("[ERROR] Build failed - exe not found.")
         sys.exit(1)
 
 

@@ -13,15 +13,24 @@ flushed, converted to WAV, and sent for analysis.
 import io
 import logging
 import threading
+import time
 import warnings
-
-# Suppress noisy soundcard discontinuity warnings (caused by CPU-heavy transcription)
-warnings.filterwarnings("ignore", message="data discontinuity")
 import wave
 from collections import Counter, deque
 
 import numpy as np
 import soundcard as sc
+from soundcard.mediafoundation import SoundcardRuntimeWarning
+
+# Suppress the specific soundcard overrun warning after startup so the terminal
+# stays readable. The actual mitigation is handled below by reducing recorder
+# blocking time and avoiding unnecessary background work.
+warnings.filterwarnings(
+    "ignore",
+    message=r"data discontinuity in recording",
+    category=SoundcardRuntimeWarning,
+    module=r"soundcard\.mediafoundation",
+)
 
 from config import (
     AUDIO_CHANNELS,
@@ -35,11 +44,62 @@ from config import (
 
 logger = logging.getLogger(__name__)
 
-# Each chunk recorded per iteration (seconds)
-_CHUNK_SEC = 1
-_REALTIME_WINDOW_SEC = max(5, TRANSCRIPTION_INTERVAL + 2)
+# Each chunk recorded per iteration (seconds). Smaller chunks reduce the chance
+# of WASAPI buffer overruns when local transcription briefly spikes CPU usage.
+_CHUNK_SEC = 0.25
+_REALTIME_WINDOW_SEC = max(10, TRANSCRIPTION_INTERVAL + 4)
 _MIN_TRANSCRIBE_SEC = 1.0
 _MIN_TRANSCRIBE_RMS = 0.01
+_SILENCE_COMMIT_SEC = 2.0
+_PUNCTUATION_COMMIT_SEC = 0.8
+
+
+def _has_voice_activity(data: np.ndarray | None) -> bool:
+    """Return True when a freshly recorded chunk contains speech-like energy."""
+    if data is None or data.size == 0:
+        return False
+    rms = float(np.sqrt(np.mean(data.astype(np.float32) ** 2)))
+    return rms > _MIN_TRANSCRIBE_RMS
+
+
+def _join_transcript_text(existing: str, addition: str) -> str:
+    """Append transcript text while preserving punctuation spacing."""
+    left = existing.strip()
+    right = addition.strip()
+    if not left:
+        return right
+    if not right:
+        return left
+    if right[0] in ",.!?;:)]}" or left.endswith(("(", "[", "{", '"', "'")):
+        return left + right
+    return f"{left} {right}"
+
+
+def _ends_sentence(text: str) -> bool:
+    """Return True when text looks like a completed sentence/utterance."""
+    stripped = text.strip()
+    if not stripped:
+        return False
+    return stripped.endswith((".", "!", "?", "…", ".\"", "!\"", "?\"", ".'", "!'", "?'", ")", "]"))
+
+
+def _append_committed_text(existing: str, addition: str) -> str:
+    """Append a completed utterance as its own logical transcript line."""
+    segment = addition.strip()
+    if not segment:
+        return existing
+    if not existing:
+        return segment
+    return f"{existing}\n{segment}"
+
+
+def _compose_transcript(committed: str, draft: str) -> str:
+    """Return the user-visible transcript including any in-progress draft."""
+    committed = committed.strip()
+    draft = draft.strip()
+    if committed and draft:
+        return f"{committed}\n{draft}"
+    return committed or draft
 
 
 def _build_device_choices(devices, default_device, default_label: str) -> list[tuple[str, str]]:
@@ -244,7 +304,7 @@ class ContinuousCapture:
         self._output_buf = _RingBuffer(ring_seconds, sample_rate, channels)
 
         # Real-time transcription support
-        self._transcribe_fn = transcribe_fn  # callable(wav_bytes) -> str
+        self._transcribe_fn = transcribe_fn  # callable(audio_frames, sample_rate) -> str
         self._on_transcript = on_transcript  # callable(input_text, output_text)
         self._input_live_buf = _RingBuffer(_REALTIME_WINDOW_SEC, sample_rate, channels)
         self._output_live_buf = _RingBuffer(_REALTIME_WINDOW_SEC, sample_rate, channels)
@@ -252,12 +312,21 @@ class ContinuousCapture:
         self._last_output_window_text = ""
         self._transcript_input = ""
         self._transcript_output = ""
+        self._draft_input = ""
+        self._draft_output = ""
         self._transcript_lock = threading.Lock()
+        self._draft_input_started_at: float | None = None
+        self._draft_output_started_at: float | None = None
+        now = time.monotonic()
+        self._last_input_voice_at = now
+        self._last_output_voice_at = now
 
         self._running = False
         self._mic_thread: threading.Thread | None = None
         self._loopback_thread: threading.Thread | None = None
         self._transcription_thread: threading.Thread | None = None
+        self._capture_input = AUDIO_SOURCE in ("me", "both")
+        self._capture_output = AUDIO_SOURCE in ("other", "both")
 
     # ── lifecycle ───────────────────────────────────────────────────────
 
@@ -266,14 +335,17 @@ class ContinuousCapture:
             return
         self._running = True
 
-        self._mic_thread = threading.Thread(
-            target=self._record_mic, daemon=True, name="mic-capture"
-        )
-        self._loopback_thread = threading.Thread(
-            target=self._record_loopback, daemon=True, name="loopback-capture"
-        )
-        self._mic_thread.start()
-        self._loopback_thread.start()
+        if self._capture_input:
+            self._mic_thread = threading.Thread(
+                target=self._record_mic, daemon=True, name="mic-capture"
+            )
+            self._mic_thread.start()
+
+        if self._capture_output:
+            self._loopback_thread = threading.Thread(
+                target=self._record_loopback, daemon=True, name="loopback-capture"
+            )
+            self._loopback_thread.start()
 
         if self._transcribe_fn:
             self._transcription_thread = threading.Thread(
@@ -283,8 +355,11 @@ class ContinuousCapture:
             logger.info("Real-time transcription enabled (interval=%ds).", TRANSCRIPTION_INTERVAL)
 
         logger.info(
-            "Continuous capture started (ring=%ds, sr=%d).",
-            self.ring_seconds, self.sample_rate,
+            "Continuous capture started (source=%s, ring=%ds, sr=%d, chunk=%.0fms).",
+            AUDIO_SOURCE,
+            self.ring_seconds,
+            self.sample_rate,
+            _CHUNK_SEC * 1000,
         )
 
     def stop(self) -> None:
@@ -323,6 +398,8 @@ class ContinuousCapture:
     def _record_mic(self) -> None:
         """Continuously record from the selected microphone."""
         try:
+            if not self._capture_input:
+                return
             mic = get_selected_microphone(AUDIO_INPUT_DEVICE_ID)
             if mic is None:
                 logger.warning("No microphone device available — your audio will not be recorded.")
@@ -334,6 +411,8 @@ class ContinuousCapture:
             ) as rec:
                 while self._running:
                     data = rec.record(numframes=chunk_frames)
+                    if _has_voice_activity(data):
+                        self._last_input_voice_at = time.monotonic()
                     self._input_buf.append(data)
                     if self._transcribe_fn:
                         self._input_live_buf.append(data.copy())
@@ -343,6 +422,8 @@ class ContinuousCapture:
     def _record_loopback(self) -> None:
         """Continuously record system audio via WASAPI loopback."""
         try:
+            if not self._capture_output:
+                return
             speaker = get_selected_speaker(AUDIO_OUTPUT_DEVICE_ID)
             if speaker is None:
                 logger.warning("No output device available — meeting audio will not be recorded.")
@@ -357,6 +438,8 @@ class ContinuousCapture:
             ) as rec:
                 while self._running:
                     data = rec.record(numframes=chunk_frames)
+                    if _has_voice_activity(data):
+                        self._last_output_voice_at = time.monotonic()
                     self._output_buf.append(data)
                     if self._transcribe_fn:
                         self._output_live_buf.append(data.copy())
@@ -378,9 +461,66 @@ class ContinuousCapture:
 
     # ── real-time transcription ─────────────────────────────────────────
 
+    def _update_stream_transcript(
+        self,
+        stream: str,
+        incremental_text: str,
+        silence_seconds: float,
+        now: float,
+    ) -> bool:
+        """Update committed/draft transcript state for one audio stream."""
+        if stream == "input":
+            transcript_attr = "_transcript_input"
+            draft_attr = "_draft_input"
+            started_attr = "_draft_input_started_at"
+        else:
+            transcript_attr = "_transcript_output"
+            draft_attr = "_draft_output"
+            started_attr = "_draft_output_started_at"
+
+        changed = False
+        incoming = incremental_text.strip()
+
+        with self._transcript_lock:
+            draft = getattr(self, draft_attr)
+            if incoming:
+                updated_draft = _join_transcript_text(draft, incoming)
+                if updated_draft != draft:
+                    setattr(self, draft_attr, updated_draft)
+                    draft = updated_draft
+                    changed = True
+                if getattr(self, started_attr) is None:
+                    setattr(self, started_attr, now)
+
+            draft = getattr(self, draft_attr)
+            if not draft:
+                setattr(self, started_attr, None)
+                return changed
+
+            should_commit = silence_seconds >= _SILENCE_COMMIT_SEC
+            if not should_commit and silence_seconds >= _PUNCTUATION_COMMIT_SEC:
+                should_commit = _ends_sentence(draft)
+
+            if should_commit:
+                transcript = getattr(self, transcript_attr)
+                transcript = _append_committed_text(transcript, draft)
+                setattr(self, transcript_attr, transcript)
+                setattr(self, draft_attr, "")
+                setattr(self, started_attr, None)
+                changed = True
+
+        return changed
+
+    def _current_transcripts(self) -> tuple[str, str]:
+        """Return committed transcripts with any active in-progress drafts."""
+        with self._transcript_lock:
+            return (
+                _compose_transcript(self._transcript_input, self._draft_input),
+                _compose_transcript(self._transcript_output, self._draft_output),
+            )
+
     def _transcription_loop(self) -> None:
         """Periodically transcribe recent rolling windows in the background."""
-        import time
         from concurrent.futures import ThreadPoolExecutor
 
         executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="whisper")
@@ -389,6 +529,7 @@ class ContinuousCapture:
             time.sleep(TRANSCRIPTION_INTERVAL)
             if not self._running:
                 break
+            now = time.monotonic()
 
             # Read the most recent rolling windows so transcription never builds backlog.
             if AUDIO_SOURCE in ("me", "both"):
@@ -442,34 +583,38 @@ class ContinuousCapture:
             append_output = _extract_incremental_text(self._last_output_window_text, new_output)
             self._last_input_window_text = new_input or ""
             self._last_output_window_text = new_output or ""
+            input_silence = max(0.0, now - self._last_input_voice_at)
+            output_silence = max(0.0, now - self._last_output_voice_at)
 
-            if append_input or append_output:
-                with self._transcript_lock:
-                    if append_input:
-                        self._transcript_input += append_input + "\n"
-                    if append_output:
-                        self._transcript_output += append_output + "\n"
+            changed = False
+            if AUDIO_SOURCE in ("me", "both"):
+                changed = self._update_stream_transcript("input", append_input, input_silence, now) or changed
+            if AUDIO_SOURCE in ("other", "both"):
+                changed = self._update_stream_transcript("output", append_output, output_silence, now) or changed
 
-                if self._on_transcript:
-                    with self._transcript_lock:
-                        self._on_transcript(
-                            self._transcript_input,
-                            self._transcript_output,
-                        )
+            if changed and self._on_transcript:
+                input_text, output_text = self._current_transcripts()
+                self._on_transcript(input_text, output_text)
 
         executor.shutdown(wait=False)
 
     def get_transcript(self) -> tuple[str, str]:
         """Return accumulated transcript (input, output) without clearing."""
-        with self._transcript_lock:
-            return self._transcript_input, self._transcript_output
+        return self._current_transcripts()
 
     def clear_transcript(self) -> tuple[str, str]:
         """Return and clear accumulated transcript."""
         with self._transcript_lock:
-            result = (self._transcript_input, self._transcript_output)
+            result = (
+                _compose_transcript(self._transcript_input, self._draft_input),
+                _compose_transcript(self._transcript_output, self._draft_output),
+            )
             self._transcript_input = ""
             self._transcript_output = ""
+            self._draft_input = ""
+            self._draft_output = ""
+            self._draft_input_started_at = None
+            self._draft_output_started_at = None
         return result
 
 

@@ -14,7 +14,6 @@ import keyboard  # global hotkey library
 
 from analyzer import analyze_screenshot, analyze_text, analyze_transcript
 from audio_capture import ContinuousCapture, check_audio_available
-from local_transcriber import transcribe_local
 from config import (
     AUDIO_CAPTURE_ENABLED,
     AUDIO_SOURCE,
@@ -26,6 +25,7 @@ from config import (
 )
 from overlay import OverlayApp
 from screenshot import capture_full_screen
+from speech_to_text import describe_active_stt_provider, transcribe_audio_array
 
 # ── Logging ─────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -75,8 +75,13 @@ def _action_audio_analysis() -> None:
     # Check if user selected specific text in the panel
     selected = app.get_selection()
     if selected and selected.strip():
+        loading_started = True
+        app.schedule(app.begin_loading, "Analyzing Selection")
         app.schedule(app.set_status, "Analyzing selection…")
-        app.schedule(app.set_insight, f"⏳  Analyzing selected text…\n\n\"{selected[:200].strip()}…\"")
+        app.schedule(
+            app.set_insight,
+            "Analyzing Selection\n\nReviewing the selected transcript and preparing a response."
+        )
         try:
             result = analyze_text(
                 selected.strip(),
@@ -88,6 +93,8 @@ def _action_audio_analysis() -> None:
             logger.exception("Selection analysis error")
             app.schedule(app.set_insight, f"Error: {exc}")
         finally:
+            if loading_started:
+                app.schedule(app.end_loading)
             app.schedule(app.set_status, "Listening…")
         return
 
@@ -99,12 +106,12 @@ def _action_audio_analysis() -> None:
         app.schedule(app.set_insight, "No transcript yet — keep talking.")
         return
 
+    loading_started = True
+    app.schedule(app.begin_loading, "Analyzing Conversation")
     app.schedule(app.set_status, "Analyzing transcript…")
     app.schedule(
         app.set_insight,
-        "⏳  Analyzing what they said…\n\n"
-        + (f"[THEM]: {output_text[:200].strip()}…\n" if output_text.strip() else "")
-        + (f"[YOU]: {input_text[:200].strip()}…" if input_text.strip() else ""),
+        "Analyzing Conversation\n\nReading the latest transcript and drafting your response.",
     )
 
     try:
@@ -124,6 +131,8 @@ def _action_audio_analysis() -> None:
         logger.exception("Audio analysis error")
         app.schedule(app.set_insight, f"Error: {exc}")
     finally:
+        if loading_started:
+            app.schedule(app.end_loading)
         app.schedule(app.set_status, "Listening…")
 
 
@@ -134,6 +143,7 @@ def _action_screenshot_feedback() -> None:
         return
 
     app.schedule(app.set_status, "Capturing…")
+    loading_started = False
 
     try:
         # Hide overlay synchronously so it's not in the screenshot
@@ -155,8 +165,13 @@ def _action_screenshot_feedback() -> None:
         app.schedule(_do_show)
         show_done.wait(timeout=1.0)
 
+        loading_started = True
+        app.schedule(app.begin_loading, "Analyzing Screen")
         app.schedule(app.set_status, "Analyzing…")
-        app.schedule(app.set_insight, "⏳  Analyzing screenshot…")
+        app.schedule(
+            app.set_insight,
+            "Analyzing Screen\n\nInspecting the captured screen and extracting the relevant context."
+        )
 
         result = analyze_screenshot(png)
         app.schedule(app.set_insight, result)
@@ -165,6 +180,8 @@ def _action_screenshot_feedback() -> None:
         app.schedule(app.show)
         app.schedule(app.set_insight, f"Error: {exc}")
     finally:
+        if loading_started:
+            app.schedule(app.end_loading)
         # Restore correct status based on capture state
         if capture and capture.is_running:
             app.schedule(app.set_status, "Listening…")
@@ -175,8 +192,12 @@ def _action_screenshot_feedback() -> None:
 def _action_quick_input_submit(text: str) -> None:
     """Handle text submitted from the quick-input dialog."""
     app.schedule(app.show)
+    app.schedule(app.begin_loading, "Analyzing Request")
     app.schedule(app.set_status, "Analyzing…")
-    app.schedule(app.set_insight, f"⏳  Analyzing: \"{text[:80]}…\"")
+    app.schedule(
+        app.set_insight,
+        "Analyzing Request\n\nWorking through your prompt and preparing a response."
+    )
 
     def run():
         try:
@@ -190,6 +211,7 @@ def _action_quick_input_submit(text: str) -> None:
             logger.exception("Quick-input analysis error")
             app.schedule(app.set_insight, f"Error: {exc}")
         finally:
+            app.schedule(app.end_loading)
             app.schedule(app.set_status, "Ready")
 
     threading.Thread(target=run, daemon=True).start()
@@ -213,21 +235,19 @@ def on_quick_input_hotkey() -> None:
 # ── Live transcript callback ────────────────────────────────────────────────
 
 def _format_paragraphs(raw: str) -> str:
-    """Turn newline-separated transcript chunks into readable paragraphs."""
-    chunks = [c.strip() for c in raw.strip().split("\n") if c.strip()]
-    if not chunks:
+    """Format transcript lines into paragraphs using sentence endings."""
+    segments = [segment.strip() for segment in raw.strip().split("\n") if segment.strip()]
+    if not segments:
         return ""
-    paragraphs = []
-    current = [chunks[0]]
-    for c in chunks[1:]:
-        # Start a new paragraph every ~3 chunks for readability
-        if len(current) >= 3:
-            paragraphs.append(" ".join(current))
-            current = [c]
-        else:
-            current.append(c)
-    if current:
-        paragraphs.append(" ".join(current))
+    paragraphs: list[str] = []
+    current_parts: list[str] = []
+    for segment in segments:
+        current_parts.append(segment)
+        if segment.endswith((".", "!", "?", "…", ".\"", "!\"", "?\"", ".'", "!'", "?'")):
+            paragraphs.append(" ".join(current_parts))
+            current_parts = []
+    if current_parts:
+        paragraphs.append(" ".join(current_parts))
     return "\n\n".join(paragraphs)
 
 
@@ -298,11 +318,12 @@ def main() -> None:
     global app, capture
 
     logger.info("Starting HelpAI…")
+    logger.info("Speech-to-text provider: %s", describe_active_stt_provider())
 
     # Start continuous audio capture (mic + system loopback)
     if AUDIO_CAPTURE_ENABLED and check_audio_available():
         capture = ContinuousCapture(
-            transcribe_fn=transcribe_local,
+            transcribe_fn=transcribe_audio_array,
             on_transcript=_on_transcript_update,
         )
         capture.start()

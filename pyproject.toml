@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "helpai"
+dynamic = ["version"]
+description = "Internal QA and training overlay for audio, screenshot, and quick-input analysis on Windows."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "HelpAI Team" }]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Operating System :: Microsoft :: Windows",
+    "Environment :: Win32 (MS Windows)",
+]
+dependencies = [
+    "openai>=1.30.0",
+    "faster-whisper>=1.2.0",
+    "SoundCard>=0.4.3",
+    "numpy>=1.24.0",
+    "mss>=9.0.0",
+    "Pillow>=10.0.0",
+    "keyboard>=0.13.5",
+    "pywin32>=306",
+]
+
+[project.scripts]
+helpai = "helpai:main"
+
+[tool.setuptools]
+py-modules = [
+    "analyzer",
+    "audio_capture",
+    "config",
+    "create_shortcut",
+    "helpai",
+    "helpai_version",
+    "launcher",
+    "local_transcriber",
+    "main",
+    "overlay",
+    "screenshot",
+    "settings",
+    "settings_ui",
+    "speech_to_text",
+    "transcript_filters",
+    "visibility",
+]
+
+[tool.setuptools.dynamic]
+version = { attr = "helpai_version.__version__" }

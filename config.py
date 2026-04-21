@@ -8,22 +8,29 @@ the launcher / settings UI has saved them.  Everything else is fixed.
 
 import os
 
+from helpai_version import __version__ as APP_VERSION
 from settings import load as _load_settings
 
 _user = _load_settings()
 
 # ─── General ────────────────────────────────────────────────────────────────
 APP_NAME = "HelpAI"
-APP_VERSION = "1.3.1"
 
 # ─── OpenAI / LLM ──────────────────────────────────────────────────────────
 OPENAI_API_KEY = _user.get("OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY", "")
 OPENAI_MODEL = _user.get("OPENAI_MODEL") or os.environ.get("OPENAI_MODEL", "gpt-4o")
-WHISPER_MODEL = "whisper-1"
+
+# ─── Speech-to-Text ────────────────────────────────────────────────────────
+XAI_API_KEY = _user.get("XAI_API_KEY") or os.environ.get("XAI_API_KEY", "")
+STT_PROVIDER = (_user.get("STT_PROVIDER") or os.environ.get("STT_PROVIDER", "auto")).strip().lower()
+XAI_STT_ENDPOINT = os.environ.get("XAI_STT_ENDPOINT", "https://api.x.ai/v1/stt")
+XAI_STT_LANGUAGE = _user.get("XAI_STT_LANGUAGE", "en")
+XAI_STT_FORMAT_TEXT = _user.get("XAI_STT_FORMAT_TEXT", True)
+XAI_STT_TIMEOUT_SECONDS = int(_user.get("XAI_STT_TIMEOUT_SECONDS", 30))
 
 # ─── Audio Capture ──────────────────────────────────────────────────────────
 AUDIO_CAPTURE_ENABLED = _user.get("AUDIO_CAPTURE_ENABLED", True)
-AUDIO_SAMPLE_RATE = 16_000          # Hz – Whisper expects 16 kHz
+AUDIO_SAMPLE_RATE = 16_000          # Hz – current STT backends are tuned for 16 kHz input
 AUDIO_CHANNELS = 1
 AUDIO_CHUNK_DURATION = _user.get("AUDIO_CHUNK_DURATION", 30)
 AUDIO_RING_BUFFER_SECONDS = _user.get("AUDIO_RING_BUFFER_SECONDS", 120)  # continuous buffer length

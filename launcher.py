@@ -20,6 +20,10 @@ def launch_main():
     main()
 
 
-if __name__ == "__main__":
+def main() -> None:
     win = SettingsWindow(on_save_and_launch=launch_main)
     win.run()
+
+
+if __name__ == "__main__":
+    main()
