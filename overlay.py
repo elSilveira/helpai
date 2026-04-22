@@ -118,6 +118,96 @@ def _add_tooltip(widget: tk.Widget, text: str) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+#  LoadingSplash
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class LoadingSplash:
+    """Splash/loading window shown during app initialization."""
+
+    _DOT_FRAMES = ("●○○○○", "○●○○○", "○○●○○", "○○○●○", "○○○○●")
+
+    def __init__(self) -> None:
+        self.root = tk.Tk()
+        self.root.overrideredirect(True)
+        self.root.attributes("-topmost", True)
+        self.root.configure(bg=_MANTLE)
+
+        w, h = 400, 150
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+        self.root.geometry(f"{w}x{h}+{(sw - w) // 2}+{(sh - h) // 2}")
+
+        # Thin accent top border
+        tk.Frame(self.root, bg=_ACCENT, height=2).pack(fill=tk.X, side=tk.TOP)
+
+        inner = tk.Frame(self.root, bg=_MANTLE)
+        inner.pack(fill=tk.BOTH, expand=True, padx=24, pady=16)
+
+        tk.Label(
+            inner,
+            text=f"{APP_NAME}  {APP_VERSION}",
+            bg=_MANTLE,
+            fg=_TEXT,
+            font=(OVERLAY_FONT_FAMILY, 13, "bold"),
+        ).pack(anchor="w")
+
+        self._status_var = tk.StringVar(value="Starting\u2026")
+        tk.Label(
+            inner,
+            textvariable=self._status_var,
+            bg=_MANTLE,
+            fg=_SUBTEXT,
+            font=(OVERLAY_FONT_FAMILY, 9),
+            wraplength=350,
+            justify=tk.LEFT,
+        ).pack(anchor="w", pady=(6, 0))
+
+        self._dot_var = tk.StringVar(value=self._DOT_FRAMES[0])
+        tk.Label(
+            inner,
+            textvariable=self._dot_var,
+            bg=_MANTLE,
+            fg=_ACCENT,
+            font=(OVERLAY_FONT_FAMILY, 9),
+        ).pack(anchor="w", pady=(8, 0))
+
+        self._dot_frame = 0
+        self._after_id: str | None = None
+        self._animate()
+        _apply_exclusion(self.root)
+
+    def _animate(self) -> None:
+        self._dot_frame = (self._dot_frame + 1) % len(self._DOT_FRAMES)
+        self._dot_var.set(self._DOT_FRAMES[self._dot_frame])
+        self._after_id = self.root.after(200, self._animate)
+
+    def set_status(self, text: str) -> None:
+        """Thread-safe status line update."""
+        try:
+            self.root.after(0, self._status_var.set, text)
+        except Exception:
+            pass
+
+    def close(self) -> None:
+        """Thread-safe close — cancels animation then destroys the splash window."""
+        def _destroy():
+            if self._after_id:
+                try:
+                    self.root.after_cancel(self._after_id)
+                except Exception:
+                    pass
+            self.root.destroy()
+        try:
+            self.root.after(0, _destroy)
+        except Exception:
+            pass
+
+    def run(self) -> None:
+        self.root.mainloop()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 #  OverlayApp
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -152,12 +242,15 @@ class OverlayApp:
         self._saved_conv_geo: str | None = None
         self._conv_text: scrolledtext.ScrolledText | None = None
         self._pending_conv: str | None = None  # buffer when panel hidden
+        self._conv_meter_frame: tk.Frame | None = None
+        self._audio_level_rows: dict[str, dict[str, object]] = {}
 
         # ── Insight Panel ──────────────────────────────────────────────
         self._insight_panel: tk.Toplevel | None = None
         self._insight_visible = False
         self._saved_insight_geo: str | None = None
         self._insight_text: scrolledtext.ScrolledText | None = None
+        self._insight_size_locked = False  # True after first auto-expand
 
         # ── Settings Panel ─────────────────────────────────────────────
         self._settings_panel: tk.Toplevel | None = None
@@ -170,6 +263,12 @@ class OverlayApp:
         # ── Quick-input window ─────────────────────────────────────────
         self._quick_input_win: tk.Toplevel | None = None
         self._saved_quick_input_geo: str | None = None
+
+        # ── Loading animation state ────────────────────────────────────
+        self._loading_active = False
+        self._loading_frame = 0
+        self._loading_title = ""
+        self._loading_after_id = None
 
         # ── Callbacks (set by main.py) ─────────────────────────────────
         self.on_quick_input_submit: callable = lambda text: None
@@ -389,6 +488,13 @@ class OverlayApp:
         if clear_w:
             clear_w.bind("<Button-1>", lambda _: self.clear_conversation())
 
+        self._conv_meter_frame = tk.Frame(panel, bg=_BASE)
+        self._conv_meter_frame.pack(fill=tk.X, padx=OVERLAY_PADDING, before=text_w)
+        self._audio_level_rows = {
+            "output": self._build_audio_meter_row(self._conv_meter_frame, "🔊 THEM"),
+            "input": self._build_audio_meter_row(self._conv_meter_frame, "🎙 YOU"),
+        }
+
         # Context keys bar
         self._context_frame = tk.Frame(panel, bg=_MANTLE)
         self._context_frame.pack(fill=tk.X, side=tk.BOTTOM)
@@ -431,6 +537,131 @@ class OverlayApp:
         self._conv_text.insert(tk.END, text)
         self._conv_text.config(state=tk.DISABLED)
         self._conv_text.see(tk.END)
+
+    def _build_audio_meter_row(self, parent: tk.Frame, title: str) -> dict[str, object]:
+        """Create one conversation-panel audio meter row."""
+        row = tk.Frame(parent, bg=_BASE)
+
+        header = tk.Frame(row, bg=_BASE)
+        header.pack(fill=tk.X)
+
+        title_label = tk.Label(
+            header,
+            text=title,
+            bg=_BASE,
+            fg=_TEXT,
+            font=(OVERLAY_FONT_FAMILY, 8, "bold"),
+            anchor="w",
+        )
+        title_label.pack(side=tk.LEFT)
+
+        device_label = tk.Label(
+            header,
+            text="",
+            bg=_BASE,
+            fg=_SUBTEXT,
+            font=(OVERLAY_FONT_FAMILY, 7),
+            anchor="e",
+        )
+        device_label.pack(side=tk.RIGHT)
+
+        meter = tk.Canvas(
+            row,
+            height=12,
+            bg=_SURFACE0,
+            bd=0,
+            highlightthickness=1,
+            highlightbackground=_SURFACE1,
+            relief=tk.FLAT,
+        )
+        fill_id = meter.create_rectangle(0, 0, 0, 12, fill=_ACCENT, width=0)
+        meter.pack(fill=tk.X, pady=(2, 0))
+
+        return {
+            "frame": row,
+            "title": title_label,
+            "device": device_label,
+            "meter": meter,
+            "fill": fill_id,
+            "visible": False,
+            "pady": None,
+            "device_text": None,
+            "title_dimmed": None,
+            "fill_width": None,
+            "fill_color": None,
+        }
+
+    def _meter_color(self, level: float, active: bool) -> str:
+        if not active and level < 0.04:
+            return _SURFACE1
+        if level >= 0.85:
+            return _RED
+        if level >= 0.55:
+            return _PEACH
+        if level >= 0.22:
+            return _GREEN
+        return _ACCENT
+
+    def set_audio_levels(self, levels: dict[str, dict[str, object]]) -> None:
+        """Update the conversation-panel audio meters for the active devices."""
+        self._ensure_conv_panel()
+        if not self._conv_meter_frame:
+            return
+
+        visible_streams = [key for key in ("output", "input") if levels.get(key)]
+        visible_positions = {key: index for index, key in enumerate(visible_streams)}
+
+        for key in ("output", "input"):
+            row = self._audio_level_rows.get(key)
+            if not row:
+                continue
+
+            position = visible_positions.get(key)
+            should_show = position is not None
+            if not should_show:
+                if row["visible"]:
+                    row["frame"].pack_forget()
+                    row["visible"] = False
+                    row["pady"] = None
+                continue
+
+            pady = ((10, 0) if position == 0 else (6, 0))
+            if not row["visible"]:
+                row["frame"].pack(fill=tk.X, pady=pady)
+                row["visible"] = True
+                row["pady"] = pady
+            elif row["pady"] != pady:
+                row["frame"].pack_configure(pady=pady)
+                row["pady"] = pady
+
+            info = levels[key]
+            device_name = str(info.get("device_name") or ("Microphone" if key == "input" else "System Audio"))
+            if len(device_name) > 36:
+                device_name = f"{device_name[:33]}..."
+            if row["device_text"] != device_name:
+                row["device"].config(text=device_name)
+                row["device_text"] = device_name
+
+            level = max(0.0, min(1.0, float(info.get("level", 0.0))))
+            active = bool(info.get("active", False))
+            title_dimmed = not (active or level > 0.06)
+            if row["title_dimmed"] != title_dimmed:
+                row["title"].config(fg=_SUBTEXT if title_dimmed else _TEXT)
+                row["title_dimmed"] = title_dimmed
+
+            meter = row["meter"]
+            width = meter.winfo_width()
+            if width <= 1:
+                width = max(1, meter.winfo_reqwidth())
+            fill_width = int(width * level)
+            if row["fill_width"] != fill_width:
+                meter.coords(row["fill"], 0, 0, fill_width, 12)
+                row["fill_width"] = fill_width
+
+            fill_color = self._meter_color(level, active)
+            if row["fill_color"] != fill_color:
+                meter.itemconfig(row["fill"], fill=fill_color)
+                row["fill_color"] = fill_color
 
     # ═══════════════════════════════════════════════════════════════════
     #  Context Keys
@@ -533,6 +764,7 @@ class OverlayApp:
         )
         self._insight_panel = panel
         self._insight_text = text_w
+        self._insight_size_locked = False
         close_w.bind("<Button-1>", lambda _: self.toggle_insight())
 
     def toggle_insight(self) -> None:
@@ -1023,6 +1255,36 @@ class OverlayApp:
         self._status_label.config(text=f" {text} ")
         self.root.update_idletasks()
 
+    # ── Loading animation ──────────────────────────────────────────────────
+
+    _SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
+
+    def begin_loading(self, title: str = "Working") -> None:
+        """Start a spinner animation in the status bar."""
+        self._loading_title = title
+        self._loading_frame = 0
+        self._loading_active = True
+        self._tick_loading()
+
+    def _tick_loading(self) -> None:
+        if not getattr(self, "_loading_active", False):
+            return
+        frame = self._SPINNER_FRAMES[self._loading_frame % len(self._SPINNER_FRAMES)]
+        self._status_label.config(text=f" {frame} {self._loading_title}… ")
+        self._loading_frame += 1
+        self._loading_after_id = self.root.after(80, self._tick_loading)
+
+    def end_loading(self) -> None:
+        """Stop the spinner animation."""
+        self._loading_active = False
+        after_id = getattr(self, "_loading_after_id", None)
+        if after_id:
+            try:
+                self.root.after_cancel(after_id)
+            except Exception:
+                pass
+            self._loading_after_id = None
+
     def set_conversation(self, text: str) -> None:
         """Replace conversation panel content."""
         self._ensure_conv_panel()
@@ -1074,6 +1336,9 @@ class OverlayApp:
         self._insight_text.see("1.0")
 
     def _auto_expand_insight(self) -> None:
+        """Expand the insight panel height on first show only; never move it after."""
+        if self._insight_size_locked:
+            return
         if not self._insight_panel or not self._insight_text:
             return
         self._insight_panel.update_idletasks()
@@ -1089,6 +1354,7 @@ class OverlayApp:
         cur_x = self._insight_panel.winfo_x()
         cur_y = self._insight_panel.winfo_y()
         self._insight_panel.geometry(f"{cur_w}x{new_h}+{cur_x}+{cur_y}")
+        self._insight_size_locked = True
 
     def show(self) -> None:
         if self._saved_bar_geo:

@@ -22,6 +22,11 @@ SetWindowDisplayAffinity = user32.SetWindowDisplayAffinity
 SetWindowDisplayAffinity.argtypes = [wintypes.HWND, wintypes.DWORD]
 SetWindowDisplayAffinity.restype = wintypes.BOOL
 
+# Extended window style constants
+_GWL_EXSTYLE = -20
+_WS_EX_TOOLWINDOW = 0x00000080   # hides from taskbar & Alt-Tab
+_WS_EX_APPWINDOW  = 0x00040000   # forces into taskbar (we remove this)
+
 
 def exclude_from_capture(hwnd: int) -> bool:
     """Apply WDA_EXCLUDEFROMCAPTURE to *hwnd*.
@@ -43,3 +48,21 @@ def get_hwnd_from_tkinter(tk_root) -> int:
     """Retrieve the native Win32 HWND from a tkinter root/toplevel widget."""
     tk_root.update_idletasks()
     return int(tk_root.wm_frame(), 16)
+
+
+def exclude_from_taskbar(hwnd: int) -> None:
+    """Remove *hwnd* from the Windows taskbar and Alt-Tab switcher.
+
+    Sets WS_EX_TOOLWINDOW and clears WS_EX_APPWINDOW so the window is
+    invisible to shell even when it has focus.
+    """
+    try:
+        GetWindowLongPtr = ctypes.windll.user32.GetWindowLongPtrW
+        SetWindowLongPtr = ctypes.windll.user32.SetWindowLongPtrW
+        GetWindowLongPtr.restype = ctypes.c_long
+        SetWindowLongPtr.restype = ctypes.c_long
+        exstyle = GetWindowLongPtr(hwnd, _GWL_EXSTYLE)
+        new_style = (exstyle | _WS_EX_TOOLWINDOW) & ~_WS_EX_APPWINDOW
+        SetWindowLongPtr(hwnd, _GWL_EXSTYLE, new_style)
+    except Exception:
+        logger.debug("exclude_from_taskbar failed for 0x%X", hwnd, exc_info=True)

@@ -43,7 +43,6 @@ _HALLUCINATION_PATTERNS: tuple[str, ...] = (
 
 _TECHNICAL_REPLACEMENTS: tuple[tuple[str, str], ...] = (
     (r"\btype script\b", "TypeScript"),
-    (r"\bthat to extend\b", "TypeScript"),
     (r"\bjava script\b", "JavaScript"),
     (r"\bgraph q l\b", "GraphQL"),
     (r"\bgraph ql\b", "GraphQL"),

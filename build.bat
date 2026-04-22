@@ -34,6 +34,7 @@ if not exist ".venv\Scripts\python.exe" (
 
 set "PYTHON=%ROOT%.venv\Scripts\python.exe"
 set "PIP=%ROOT%.venv\Scripts\pip.exe"
+set "PYPROJECT_BUILD=%ROOT%.venv\Scripts\pyproject-build.exe"
 
 echo [*] Installing build dependencies...
 "%PIP%" install -q -r requirements.txt pyinstaller build
@@ -57,7 +58,13 @@ if exist "dist\pip" (
 mkdir "dist\pip" >nul 2>&1
 
 echo [*] Building pip wheel and source distribution...
-"%PYTHON%" -m build --wheel --sdist --outdir dist\pip
+if not exist "%PYPROJECT_BUILD%" (
+    echo [ERROR] Packaging tool not found: %PYPROJECT_BUILD%
+    popd >nul
+    exit /b 1
+)
+
+"%PYPROJECT_BUILD%" --wheel --sdist --outdir dist\pip
 if %errorlevel% neq 0 (
     echo [ERROR] pip package build failed.
     popd >nul

@@ -27,6 +27,8 @@ logger = logging.getLogger(__name__)
 _model: Any = None
 _model_lock = threading.Lock()
 _transcribe_lock = threading.Lock()
+_MIN_AUDIO_RMS = 0.005
+_MIN_AUDIO_PEAK = 0.02
 
 
 def _get_model():
@@ -55,6 +57,23 @@ def _get_model():
     return _model
 
 
+def is_model_cached() -> bool:
+    """Return True if the Whisper model files are already on disk (no download needed)."""
+    try:
+        from huggingface_hub import try_to_load_from_cache
+        sentinel = try_to_load_from_cache(
+            f"Systran/faster-whisper-{LOCAL_WHISPER_MODEL}", "config.json"
+        )
+        return sentinel is not None and sentinel is not getattr(sentinel, "_CACHED_NO_EXIST", object())
+    except Exception:
+        return False
+
+
+def preload_model() -> None:
+    """Pre-warm the Whisper model so the first transcription has no cold-start delay."""
+    _get_model()
+
+
 def transcribe_local(audio: np.ndarray, sample_rate: int = 16000, language: str = "en") -> str:
     """Transcribe a numpy audio array using the local Whisper model.
 
@@ -77,7 +96,8 @@ def transcribe_local(audio: np.ndarray, sample_rate: int = 16000, language: str 
 
     # Skip near-silent audio
     rms = np.sqrt(np.mean(audio ** 2))
-    if rms < 0.01:
+    peak = float(np.max(np.abs(audio))) if audio.size else 0.0
+    if rms < _MIN_AUDIO_RMS and peak < _MIN_AUDIO_PEAK:
         return ""
 
     _lang = (language or "").strip() or None  # None → Whisper auto-detect

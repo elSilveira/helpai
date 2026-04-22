@@ -28,7 +28,8 @@ from transcript_filters import filter_transcript_text
 logger = logging.getLogger(__name__)
 
 _SUPPORTED_PROVIDERS = {"auto", "local", "xai"}
-_MIN_TRANSCRIBE_RMS = 0.01
+_MIN_TRANSCRIBE_RMS = 0.005
+_MIN_TRANSCRIBE_PEAK = 0.02
 
 
 def _active_language() -> str:
@@ -82,7 +83,8 @@ def _audio_has_speech(audio: np.ndarray) -> bool:
     if audio.size == 0:
         return False
     rms = float(np.sqrt(np.mean(audio ** 2)))
-    return rms >= _MIN_TRANSCRIBE_RMS
+    peak = float(np.max(np.abs(audio)))
+    return rms >= _MIN_TRANSCRIBE_RMS or peak >= _MIN_TRANSCRIBE_PEAK
 
 
 def _audio_array_to_wav_bytes(audio: np.ndarray, sample_rate: int) -> bytes:

@@ -364,4 +364,10 @@ class SettingsWindow:
             self.on_save_and_launch()
 
     def run(self):
+        # Remove window from taskbar after it's mapped
+        try:
+            from visibility import exclude_from_taskbar
+            self.root.after(100, lambda: exclude_from_taskbar(int(self.root.wm_frame(), 16)))
+        except Exception:
+            pass
         self.root.mainloop()

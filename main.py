@@ -9,8 +9,11 @@ import logging
 import os
 import sys
 import threading
+from pathlib import Path
 
 import keyboard  # global hotkey library
+import pystray
+from PIL import Image, ImageDraw, ImageFont
 
 from analyzer import analyze_screenshot, analyze_text, analyze_transcript
 from audio_capture import ContinuousCapture, check_audio_available
@@ -21,28 +24,93 @@ from config import (
     HOTKEY_QUICK_INPUT,
     HOTKEY_SCREENSHOT_FEEDBACK,
     HOTKEY_SHOW_CONVERSATION,
+    LOCAL_WHISPER_MODEL,
     SCREENSHOT_FEEDBACK_ENABLED,
 )
-from overlay import OverlayApp
+from local_transcriber import is_model_cached, preload_model
+from overlay import LoadingSplash, OverlayApp
 from screenshot import capture_full_screen
-from speech_to_text import describe_active_stt_provider, transcribe_audio_array
+from speech_to_text import describe_active_stt_provider, get_active_stt_provider, transcribe_audio_array
+from visibility import exclude_from_taskbar
 
 # ── Logging ─────────────────────────────────────────────────────────────────
+_LOG_FILE = Path(sys.executable).resolve().parent / "helpai.log" if getattr(sys, "frozen", False) else None
+
+
+def _build_log_handlers() -> list[logging.Handler]:
+    """Write frozen-app logs to disk so packaged failures are inspectable."""
+    if _LOG_FILE is not None:
+        try:
+            return [logging.FileHandler(_LOG_FILE, encoding="utf-8")]
+        except Exception:
+            pass
+    return [logging.StreamHandler()]
+
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%H:%M:%S",
+    handlers=_build_log_handlers(),
+    force=True,
 )
 logger = logging.getLogger("helpai")
+_AUDIO_LEVEL_REFRESH_MS = 140
 
 
 # ── Global state ────────────────────────────────────────────────────────────
 app: OverlayApp | None = None
 capture: ContinuousCapture | None = None
+_tray_icon: "pystray.Icon | None" = None
 
 # ── Conversation context ────────────────────────────────────────────────────
 _last_request: str = ""           # last request text sent to AI
 _last_response: str = ""          # last AI response
+
+
+# ── System tray ─────────────────────────────────────────────────────────────
+
+def _make_tray_image() -> Image.Image:
+    """Generate a simple 64×64 tray icon using PIL."""
+    img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    # Filled circle background
+    draw.ellipse([4, 4, 60, 60], fill="#89b4fa")
+    # "AI" text centred
+    try:
+        font = ImageFont.truetype("segoeui.ttf", 22)
+    except Exception:
+        font = ImageFont.load_default()
+    text = "AI"
+    bbox = draw.textbbox((0, 0), text, font=font)
+    tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    draw.text(((64 - tw) // 2, (64 - th) // 2 - 2), text, fill="#1e1e2e", font=font)
+    return img
+
+
+def _tray_toggle(_icon=None, _item=None) -> None:
+    """Show or hide the overlay from the tray menu / icon click."""
+    if app:
+        app.schedule(app.toggle)
+
+
+def _tray_quit(_icon=None, _item=None) -> None:
+    """Quit triggered from the tray icon."""
+    if app:
+        app.schedule(_quit_app)
+
+
+def _start_tray() -> None:
+    """Build the pystray icon and run it detached in its own thread."""
+    global _tray_icon
+    from config import APP_NAME
+    menu = pystray.Menu(
+        pystray.MenuItem("Show / Hide", _tray_toggle, default=True),
+        pystray.Menu.SEPARATOR,
+        pystray.MenuItem("Quit", _tray_quit),
+    )
+    _tray_icon = pystray.Icon(APP_NAME, _make_tray_image(), APP_NAME, menu)
+    _tray_icon.run_detached()
 
 
 # ── Action handlers (run in background threads) ────────────────────────────
@@ -253,6 +321,8 @@ def _format_paragraphs(raw: str) -> str:
 
 def _on_transcript_update(input_text: str, output_text: str) -> None:
     """Called by ContinuousCapture when new transcript text is available."""
+    if app is None:
+        return
     lines = []
     if AUDIO_SOURCE in ("other", "both") and output_text.strip():
         lines.append(f"🔊 [THEM]:\n{_format_paragraphs(output_text)}")
@@ -261,6 +331,20 @@ def _on_transcript_update(input_text: str, output_text: str) -> None:
     if lines:
         app.schedule(app.set_conversation, "\n\n".join(lines))
         app.schedule(app.set_status, "Transcribing…")
+
+
+def _refresh_audio_levels() -> None:
+    """Drive the conversation-panel audio meters from the current capture state."""
+    if app is None:
+        return
+
+    levels = capture.get_audio_levels() if capture else {}
+    app.set_audio_levels(levels)
+
+    try:
+        app.root.after(_AUDIO_LEVEL_REFRESH_MS, _refresh_audio_levels)
+    except Exception:
+        logger.debug("Audio meter refresh stopped.", exc_info=True)
 
 
 # ── Stop / Quit ─────────────────────────────────────────────────────────────
@@ -293,7 +377,14 @@ def _quit_app() -> None:
     except Exception:
         pass
 
-    # 3. Destroy the tkinter root (closes all windows)
+    # 3. Stop system tray icon
+    try:
+        if _tray_icon:
+            _tray_icon.stop()
+    except Exception:
+        pass
+
+    # 4. Destroy the tkinter root (closes all windows)
     try:
         if app and app.root:
             app.root.destroy()
@@ -302,7 +393,7 @@ def _quit_app() -> None:
 
     logger.info("HelpAI stopped by user.")
 
-    # 4. Force-terminate the process to kill any lingering daemon threads
+    # 5. Force-terminate the process to kill any lingering daemon threads
     os._exit(0)
 
 
@@ -318,21 +409,53 @@ def main() -> None:
     global app, capture
 
     logger.info("Starting HelpAI…")
+    if _LOG_FILE is not None:
+        logger.info("Writing logs to %s", _LOG_FILE)
     logger.info("Speech-to-text provider: %s", describe_active_stt_provider())
 
-    # Start continuous audio capture (mic + system loopback)
-    if AUDIO_CAPTURE_ENABLED and check_audio_available():
-        capture = ContinuousCapture(
-            transcribe_fn=transcribe_audio_array,
-            on_transcript=_on_transcript_update,
-        )
-        capture.start()
-        audio_status = "Listening (mic + system audio)…"
-    else:
-        audio_status = "Audio capture unavailable"
-        logger.warning("No audio input device — audio features disabled.")
+    # ── Splash screen ────────────────────────────────────────────────────────
+    splash = LoadingSplash()
 
-    # Build overlay
+    def _background_init() -> None:
+        global capture
+        import time
+
+        # Start audio capture
+        if AUDIO_CAPTURE_ENABLED and check_audio_available():
+            splash.set_status("Starting audio capture…")
+            capture = ContinuousCapture(
+                transcribe_fn=transcribe_audio_array,
+                on_transcript=_on_transcript_update,
+            )
+            capture.start()
+        else:
+            logger.warning("No audio input device — audio features disabled.")
+
+        # Pre-warm local Whisper model
+        if get_active_stt_provider() == "local":
+            cached = is_model_cached()
+            if cached:
+                splash.set_status(f"Loading speech model ({LOCAL_WHISPER_MODEL})\u2026")
+            else:
+                splash.set_status(
+                    f"Downloading speech model ({LOCAL_WHISPER_MODEL})\u2026\n"
+                    "(first run only \u2014 cached afterwards)"
+                )
+            try:
+                preload_model()
+            except Exception:
+                logger.exception("Model preload failed.")
+
+        splash.set_status("Ready!")
+        time.sleep(0.4)
+        splash.close()
+
+    threading.Thread(target=_background_init, daemon=True).start()
+    splash.run()  # blocks until splash.close() destroys the window
+
+    # ── Build overlay (after splash closed) ──────────────────────────────────
+    audio_status = "Listening (mic + system audio)…" if capture else "Audio capture unavailable"
+
     app = OverlayApp()
     app.on_quick_input_submit = _action_quick_input_submit
     app.on_audio = on_audio_hotkey
@@ -342,6 +465,19 @@ def main() -> None:
     app.on_settings = _open_settings
     app.on_clear_conversation = _clear_transcript
     app.set_status(audio_status if capture else "Ready")
+    app.root.after(0, _refresh_audio_levels)
+
+    # Exclude root window from taskbar / Alt-Tab (must happen after window exists)
+    def _apply_taskbar_exclusion():
+        try:
+            hwnd = int(app.root.wm_frame(), 16)
+            exclude_from_taskbar(hwnd)
+        except Exception:
+            logger.debug("Could not apply taskbar exclusion.", exc_info=True)
+    app.root.after(100, _apply_taskbar_exclusion)
+
+    # Start system tray icon (runs in its own thread)
+    _start_tray()
 
     # Register global hotkeys
     keyboard.add_hotkey(HOTKEY_AUDIO_ANALYSIS, on_audio_hotkey, suppress=False)
@@ -363,6 +499,11 @@ def main() -> None:
             capture.stop()
         try:
             keyboard.unhook_all()
+        except Exception:
+            pass
+        try:
+            if _tray_icon:
+                _tray_icon.stop()
         except Exception:
             pass
         os._exit(0)

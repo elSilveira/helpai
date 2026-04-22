@@ -12,6 +12,7 @@ flushed, converted to WAV, and sent for analysis.
 
 import io
 import logging
+import re
 import threading
 import time
 import warnings
@@ -47,19 +48,49 @@ logger = logging.getLogger(__name__)
 # Each chunk recorded per iteration (seconds). Smaller chunks reduce the chance
 # of WASAPI buffer overruns when local transcription briefly spikes CPU usage.
 _CHUNK_SEC = 0.25
-_REALTIME_WINDOW_SEC = max(10, TRANSCRIPTION_INTERVAL + 4)
-_MIN_TRANSCRIBE_SEC = 1.0
-_MIN_TRANSCRIBE_RMS = 0.01
+_PRE_ROLL_SEC = 0.75
+_SEAL_OVERLAP_SEC = 1.5   # tail of sealed utterance kept as lead-in for next window
+_MAX_UTTERANCE_SEC = max(30, min(AUDIO_RING_BUFFER_SECONDS, 60))
+_MIN_TRANSCRIBE_SEC = 0.35
+_MIN_TRANSCRIBE_RMS = 0.005
+_VOICE_ACTIVITY_RMS = 0.004
+_VOICE_ACTIVITY_PEAK = 0.02
 _SILENCE_COMMIT_SEC = 2.0
 _PUNCTUATION_COMMIT_SEC = 0.8
+_LEVEL_SMOOTHING = 0.35
+_LEVEL_DECAY_PER_SEC = 0.85
+_METER_RMS_CEILING = 0.05
+_METER_PEAK_CEILING = 0.25
+
+
+def _chunk_energy(data: np.ndarray | None) -> tuple[float, float]:
+    """Return RMS/peak values for one audio chunk or frame window."""
+    if data is None or data.size == 0:
+        return 0.0, 0.0
+    audio = data.astype(np.float32)
+    rms = float(np.sqrt(np.mean(audio ** 2)))
+    peak = float(np.max(np.abs(audio)))
+    return rms, peak
+
+
+def _has_voice_signal(rms: float, peak: float) -> bool:
+    """Return True when chunk energy looks like speech or a leading consonant."""
+    return rms >= _VOICE_ACTIVITY_RMS or peak >= _VOICE_ACTIVITY_PEAK
+
+
+def _meter_level(rms: float, peak: float) -> float:
+    """Map chunk energy into a 0..1 UI level meter."""
+    if rms <= 0.0 and peak <= 0.0:
+        return 0.0
+    rms_ratio = min(1.0, rms / _METER_RMS_CEILING)
+    peak_ratio = min(1.0, peak / _METER_PEAK_CEILING)
+    return float(max(rms_ratio ** 0.5, peak_ratio * 0.7))
 
 
 def _has_voice_activity(data: np.ndarray | None) -> bool:
     """Return True when a freshly recorded chunk contains speech-like energy."""
-    if data is None or data.size == 0:
-        return False
-    rms = float(np.sqrt(np.mean(data.astype(np.float32) ** 2)))
-    return rms > _MIN_TRANSCRIBE_RMS
+    rms, peak = _chunk_energy(data)
+    return _has_voice_signal(rms, peak)
 
 
 def _join_transcript_text(existing: str, addition: str) -> str:
@@ -100,6 +131,32 @@ def _compose_transcript(committed: str, draft: str) -> str:
     if committed and draft:
         return f"{committed}\n{draft}"
     return committed or draft
+
+
+def _stabilize_draft_text(previous: str, candidate: str) -> str:
+    """Avoid obvious regressions when live utterance transcription fluctuates."""
+    prev = previous.strip()
+    current = candidate.strip()
+    if not current:
+        return prev
+    if not prev:
+        return current
+
+    def normalize(text: str) -> str:
+        cleaned = re.sub(r"[^\w]+", " ", text)
+        return re.sub(r"\s+", " ", cleaned).strip().lower()
+
+    prev_key = normalize(prev)
+    current_key = normalize(current)
+    if not prev_key:
+        return current
+    if prev_key == current_key:
+        return current
+    if current_key.startswith(prev_key) or prev_key in current_key:
+        return current
+    if prev_key.startswith(current_key) or current_key in prev_key:
+        return prev
+    return current
 
 
 def _build_device_choices(devices, default_device, default_label: str) -> list[tuple[str, str]]:
@@ -180,10 +237,25 @@ def get_selected_speaker(device_id: str | None = None):
 
 def _is_transcribable(frames: np.ndarray | None, sample_rate: int) -> bool:
     """Return True when a frame window is large and loud enough to transcribe."""
-    if frames is None or frames.shape[0] <= sample_rate * _MIN_TRANSCRIBE_SEC:
+    return _is_transcribable_window(frames, sample_rate, allow_short=False)
+
+
+def _is_transcribable_window(
+    frames: np.ndarray | None,
+    sample_rate: int,
+    *,
+    allow_short: bool,
+) -> bool:
+    """Return True when a live utterance window is worth sending to STT."""
+    if frames is None:
         return False
-    rms = float(np.sqrt(np.mean(frames.astype(np.float32) ** 2)))
-    return rms > _MIN_TRANSCRIBE_RMS
+    min_seconds = 0.2 if allow_short else _MIN_TRANSCRIBE_SEC
+    if frames.shape[0] <= sample_rate * min_seconds:
+        return False
+    rms, peak = _chunk_energy(frames)
+    if allow_short:
+        return rms > _VOICE_ACTIVITY_RMS or peak > (_VOICE_ACTIVITY_PEAK * 0.7)
+    return rms > _MIN_TRANSCRIBE_RMS or peak > _VOICE_ACTIVITY_PEAK
 
 
 def _extract_incremental_text(previous: str, current: str) -> str:
@@ -256,6 +328,19 @@ class _RingBuffer:
             self._total_frames = 0
         return result
 
+    def clear(self) -> None:
+        """Clear the buffer without returning its contents."""
+        with self._lock:
+            self._chunks.clear()
+            self._total_frames = 0
+
+    def snapshot_all(self) -> np.ndarray | None:
+        """Return all currently buffered audio without clearing the buffer."""
+        with self._lock:
+            if not self._chunks:
+                return None
+            return np.concatenate(list(self._chunks), axis=0)
+
     def snapshot_recent(self, seconds: float) -> np.ndarray | None:
         """Return the most recent audio window without clearing the buffer."""
         max_frames = int(seconds * self._sr)
@@ -284,6 +369,97 @@ class _RingBuffer:
         return self._total_frames / self._sr
 
 
+class _LiveStreamState:
+    """Utterance-aware live stream state used for STT and audio meters."""
+
+    def __init__(self, sample_rate: int, channels: int, fallback_name: str):
+        self._fallback_name = fallback_name
+        self._sr = sample_rate
+        self._pre_roll = _RingBuffer(_PRE_ROLL_SEC, sample_rate, channels)
+        self._utterance = _RingBuffer(_MAX_UTTERANCE_SEC, sample_rate, channels)
+        self._lock = threading.Lock()
+        now = time.monotonic()
+        self._utterance_open = False
+        self._last_voice_at = now
+        self._last_level_at = now
+        self._level = 0.0
+        self._device_name = fallback_name
+
+    def set_device_name(self, name: str) -> None:
+        with self._lock:
+            self._device_name = (name or self._fallback_name).strip() or self._fallback_name
+
+    def record_chunk(self, data: np.ndarray) -> None:
+        """Append one chunk, preserving short lead-in audio for new utterances."""
+        now = time.monotonic()
+        rms, peak = _chunk_energy(data)
+        level = _meter_level(rms, peak)
+        has_voice = _has_voice_signal(rms, peak)
+
+        with self._lock:
+            if has_voice and not self._utterance_open:
+                # If the previous seal left an overlap tail in the buffer, use it
+                # as the lead-in instead of clearing and re-adding only the pre-roll.
+                # This ensures tail words cut by the VAD get a second chance.
+                if self._utterance.duration == 0:
+                    pre_roll = self._pre_roll.snapshot_recent(_PRE_ROLL_SEC)
+                    if pre_roll is not None and pre_roll.size:
+                        self._utterance.append(pre_roll)
+                self._utterance_open = True
+
+            self._pre_roll.append(data.copy())
+            if has_voice:
+                self._last_voice_at = now
+            self._level = max(level, self._level + ((level - self._level) * _LEVEL_SMOOTHING))
+            self._last_level_at = now
+            if self._utterance_open:
+                self._utterance.append(data.copy())
+
+    def snapshot_live(self, now: float) -> tuple[np.ndarray | None, float, bool]:
+        """Return the active utterance buffer without clearing it."""
+        with self._lock:
+            silence = max(0.0, now - self._last_voice_at)
+            is_open = self._utterance_open
+        if not is_open:
+            return None, silence, False
+        return self._utterance.snapshot_all(), silence, True
+
+    def seal_if_idle(self, now: float, min_silence_sec: float) -> tuple[np.ndarray | None, float, bool]:
+        """Close and return the current utterance once it has gone idle.
+
+        Instead of fully clearing the buffer, the last _SEAL_OVERLAP_SEC seconds
+        of audio are retained as the lead-in for the next utterance so that
+        tail words clipped by the VAD can be re-transcribed with more context.
+        """
+        with self._lock:
+            silence = max(0.0, now - self._last_voice_at)
+            if not self._utterance_open or silence < min_silence_sec:
+                return None, silence, False
+            frames = self._utterance.snapshot_all()
+            # Keep an overlap tail — do NOT fully clear the buffer.
+            overlap_n = int(_SEAL_OVERLAP_SEC * self._sr)
+            self._utterance.clear()
+            if frames is not None and frames.shape[0] > overlap_n:
+                self._utterance.append(frames[-overlap_n:])
+            self._utterance_open = False
+        return frames, silence, True
+
+    def meter_snapshot(self) -> dict[str, float | str | bool]:
+        """Return UI-friendly meter data for the current stream."""
+        with self._lock:
+            level = self._level
+            last_level_at = self._last_level_at
+            device_name = self._device_name
+            active = self._utterance_open
+        elapsed = time.monotonic() - last_level_at
+        decayed_level = max(0.0, level - (elapsed * _LEVEL_DECAY_PER_SEC))
+        return {
+            "device_name": device_name,
+            "level": min(1.0, decayed_level),
+            "active": active,
+        }
+
+
 class ContinuousCapture:
     """Continuously captures mic input and system loopback into ring buffers.
     Optionally runs real-time background transcription."""
@@ -306,10 +482,8 @@ class ContinuousCapture:
         # Real-time transcription support
         self._transcribe_fn = transcribe_fn  # callable(audio_frames, sample_rate) -> str
         self._on_transcript = on_transcript  # callable(input_text, output_text)
-        self._input_live_buf = _RingBuffer(_REALTIME_WINDOW_SEC, sample_rate, channels)
-        self._output_live_buf = _RingBuffer(_REALTIME_WINDOW_SEC, sample_rate, channels)
-        self._last_input_window_text = ""
-        self._last_output_window_text = ""
+        self._input_live_state = _LiveStreamState(sample_rate, channels, "Microphone")
+        self._output_live_state = _LiveStreamState(sample_rate, channels, "System Audio")
         self._transcript_input = ""
         self._transcript_output = ""
         self._draft_input = ""
@@ -317,9 +491,10 @@ class ContinuousCapture:
         self._transcript_lock = threading.Lock()
         self._draft_input_started_at: float | None = None
         self._draft_output_started_at: float | None = None
-        now = time.monotonic()
-        self._last_input_voice_at = now
-        self._last_output_voice_at = now
+        # Last committed utterance text per stream — used to deduplicate the
+        # overlap tail that is re-transcribed at the start of each new window.
+        self._last_committed_input = ""
+        self._last_committed_output = ""
 
         self._running = False
         self._mic_thread: threading.Thread | None = None
@@ -405,17 +580,15 @@ class ContinuousCapture:
                 logger.warning("No microphone device available — your audio will not be recorded.")
                 return
             logger.info("Mic device: %s", mic.name)
+            self._input_live_state.set_device_name(mic.name)
             chunk_frames = int(self.sample_rate * _CHUNK_SEC)
             with mic.recorder(
                 samplerate=self.sample_rate, channels=self.channels
             ) as rec:
                 while self._running:
                     data = rec.record(numframes=chunk_frames)
-                    if _has_voice_activity(data):
-                        self._last_input_voice_at = time.monotonic()
                     self._input_buf.append(data)
-                    if self._transcribe_fn:
-                        self._input_live_buf.append(data.copy())
+                    self._input_live_state.record_chunk(data)
         except Exception:
             logger.exception("Microphone capture failed.")
 
@@ -432,17 +605,15 @@ class ContinuousCapture:
                 speaker.id, include_loopback=True
             )
             logger.info("Loopback device: %s", loopback.name)
+            self._output_live_state.set_device_name(speaker.name)
             chunk_frames = int(self.sample_rate * _CHUNK_SEC)
             with loopback.recorder(
                 samplerate=self.sample_rate, channels=self.channels
             ) as rec:
                 while self._running:
                     data = rec.record(numframes=chunk_frames)
-                    if _has_voice_activity(data):
-                        self._last_output_voice_at = time.monotonic()
                     self._output_buf.append(data)
-                    if self._transcribe_fn:
-                        self._output_live_buf.append(data.copy())
+                    self._output_live_state.record_chunk(data)
         except Exception:
             logger.exception(
                 "Loopback capture failed — system audio will not be recorded. "
@@ -459,32 +630,45 @@ class ContinuousCapture:
     def output_seconds(self) -> float:
         return self._output_buf.duration
 
+    def get_audio_levels(self) -> dict[str, dict[str, float | str | bool]]:
+        """Return current audio meter data for the captured streams."""
+        levels: dict[str, dict[str, float | str | bool]] = {}
+        if self._capture_output:
+            levels["output"] = self._output_live_state.meter_snapshot()
+        if self._capture_input:
+            levels["input"] = self._input_live_state.meter_snapshot()
+        return levels
+
     # ── real-time transcription ─────────────────────────────────────────
 
     def _update_stream_transcript(
         self,
         stream: str,
-        incremental_text: str,
+        live_text: str,
         silence_seconds: float,
         now: float,
+        *,
+        force_commit: bool = False,
     ) -> bool:
         """Update committed/draft transcript state for one audio stream."""
         if stream == "input":
             transcript_attr = "_transcript_input"
             draft_attr = "_draft_input"
             started_attr = "_draft_input_started_at"
+            last_committed_attr = "_last_committed_input"
         else:
             transcript_attr = "_transcript_output"
             draft_attr = "_draft_output"
             started_attr = "_draft_output_started_at"
+            last_committed_attr = "_last_committed_output"
 
         changed = False
-        incoming = incremental_text.strip()
+        incoming = live_text.strip()
 
         with self._transcript_lock:
             draft = getattr(self, draft_attr)
             if incoming:
-                updated_draft = _join_transcript_text(draft, incoming)
+                updated_draft = incoming if force_commit else _stabilize_draft_text(draft, incoming)
                 if updated_draft != draft:
                     setattr(self, draft_attr, updated_draft)
                     draft = updated_draft
@@ -497,14 +681,23 @@ class ContinuousCapture:
                 setattr(self, started_attr, None)
                 return changed
 
-            should_commit = silence_seconds >= _SILENCE_COMMIT_SEC
+            should_commit = force_commit or silence_seconds >= _SILENCE_COMMIT_SEC
             if not should_commit and silence_seconds >= _PUNCTUATION_COMMIT_SEC:
                 should_commit = _ends_sentence(draft)
 
             if should_commit:
                 transcript = getattr(self, transcript_attr)
-                transcript = _append_committed_text(transcript, draft)
-                setattr(self, transcript_attr, transcript)
+                last_committed = getattr(self, last_committed_attr)
+                # Strip any overlap already committed in the previous utterance
+                # so words at the tail don't appear twice in the transcript.
+                commit_text = (
+                    _extract_incremental_text(last_committed, draft)
+                    if last_committed else draft
+                )
+                if commit_text:
+                    transcript = _append_committed_text(transcript, commit_text)
+                    setattr(self, transcript_attr, transcript)
+                setattr(self, last_committed_attr, draft)
                 setattr(self, draft_attr, "")
                 setattr(self, started_attr, None)
                 changed = True
@@ -520,7 +713,7 @@ class ContinuousCapture:
             )
 
     def _transcription_loop(self) -> None:
-        """Periodically transcribe recent rolling windows in the background."""
+        """Periodically transcribe the active utterance for each capture stream."""
         from concurrent.futures import ThreadPoolExecutor
 
         executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="whisper")
@@ -531,66 +724,74 @@ class ContinuousCapture:
                 break
             now = time.monotonic()
 
-            # Read the most recent rolling windows so transcription never builds backlog.
+            stream_windows: dict[str, tuple[np.ndarray | None, float, bool]] = {}
+
             if AUDIO_SOURCE in ("me", "both"):
-                input_frames = self._input_live_buf.snapshot_recent(_REALTIME_WINDOW_SEC)
-            else:
-                input_frames = None
-                self._last_input_window_text = ""
+                input_frames, input_silence, input_sealed = self._input_live_state.seal_if_idle(
+                    now,
+                    _SILENCE_COMMIT_SEC,
+                )
+                if input_sealed:
+                    stream_windows["input"] = (input_frames, input_silence, True)
+                else:
+                    input_frames, input_silence, input_open = self._input_live_state.snapshot_live(now)
+                    if input_open:
+                        stream_windows["input"] = (input_frames, input_silence, False)
 
             if AUDIO_SOURCE in ("other", "both"):
-                output_frames = self._output_live_buf.snapshot_recent(_REALTIME_WINDOW_SEC)
-            else:
-                output_frames = None
-                self._last_output_window_text = ""
+                output_frames, output_silence, output_sealed = self._output_live_state.seal_if_idle(
+                    now,
+                    _SILENCE_COMMIT_SEC,
+                )
+                if output_sealed:
+                    stream_windows["output"] = (output_frames, output_silence, True)
+                else:
+                    output_frames, output_silence, output_open = self._output_live_state.snapshot_live(now)
+                    if output_open:
+                        stream_windows["output"] = (output_frames, output_silence, False)
 
-            if not _is_transcribable(input_frames, self.sample_rate):
-                input_frames = None
-                self._last_input_window_text = ""
-
-            if not _is_transcribable(output_frames, self.sample_rate):
-                output_frames = None
-                self._last_output_window_text = ""
-
-            if input_frames is None and output_frames is None:
+            if not stream_windows:
                 continue
 
-            # Transcribe both streams in parallel
-            def _do_input(f=input_frames):
-                if f is None:
+            def _do_transcribe(stream: str, frames: np.ndarray | None) -> str:
+                if frames is None:
                     return ""
                 try:
-                    return self._transcribe_fn(f, self.sample_rate)
+                    return self._transcribe_fn(frames, self.sample_rate)
                 except Exception:
-                    logger.exception("Background mic transcription failed.")
+                    logger.exception("Background %s transcription failed.", stream)
                     return ""
 
-            def _do_output(f=output_frames):
-                if f is None:
-                    return ""
-                try:
-                    return self._transcribe_fn(f, self.sample_rate)
-                except Exception:
-                    logger.exception("Background loopback transcription failed.")
-                    return ""
+            futures = {}
+            results: dict[str, str] = {}
+            for stream, (frames, _silence, sealed) in stream_windows.items():
+                if _is_transcribable_window(frames, self.sample_rate, allow_short=sealed):
+                    futures[stream] = executor.submit(_do_transcribe, stream, frames)
+                else:
+                    results[stream] = ""
 
-            fut_input = executor.submit(_do_input)
-            fut_output = executor.submit(_do_output)
-
-            new_input = fut_input.result()
-            new_output = fut_output.result()
-            append_input = _extract_incremental_text(self._last_input_window_text, new_input)
-            append_output = _extract_incremental_text(self._last_output_window_text, new_output)
-            self._last_input_window_text = new_input or ""
-            self._last_output_window_text = new_output or ""
-            input_silence = max(0.0, now - self._last_input_voice_at)
-            output_silence = max(0.0, now - self._last_output_voice_at)
+            for stream, future in futures.items():
+                results[stream] = future.result()
 
             changed = False
-            if AUDIO_SOURCE in ("me", "both"):
-                changed = self._update_stream_transcript("input", append_input, input_silence, now) or changed
-            if AUDIO_SOURCE in ("other", "both"):
-                changed = self._update_stream_transcript("output", append_output, output_silence, now) or changed
+            if "input" in stream_windows:
+                _frames, input_silence, input_sealed = stream_windows["input"]
+                changed = self._update_stream_transcript(
+                    "input",
+                    results.get("input", ""),
+                    input_silence,
+                    now,
+                    force_commit=input_sealed,
+                ) or changed
+            if "output" in stream_windows:
+                _frames, output_silence, output_sealed = stream_windows["output"]
+                changed = self._update_stream_transcript(
+                    "output",
+                    results.get("output", ""),
+                    output_silence,
+                    now,
+                    force_commit=output_sealed,
+                ) or changed
 
             if changed and self._on_transcript:
                 input_text, output_text = self._current_transcripts()
@@ -615,6 +816,8 @@ class ContinuousCapture:
             self._draft_output = ""
             self._draft_input_started_at = None
             self._draft_output_started_at = None
+            self._last_committed_input = ""
+            self._last_committed_output = ""
         return result
 
 
