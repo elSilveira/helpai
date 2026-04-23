@@ -1,36 +1,72 @@
 """
 AI Analyzer module.
 
-Wraps the OpenAI API for:
-    • Text-based insight generation (GPT-4o)
-    • Vision-based screenshot analysis (GPT-4o vision)
+Wraps the OpenAI-compatible API for:
+    • Text-based insight generation (GPT-4o / local Ollama models)
+    • Vision-based screenshot analysis (GPT-4o vision / local Ollama models)
     • Speech-to-text via the configured transcription backend
 """
 
 import base64
 import logging
+import re
 
-from openai import OpenAI
+from openai import OpenAI, NotFoundError, APIConnectionError
 
-from config import OPENAI_API_KEY, OPENAI_MODEL
+from config import (
+    LLM_PROVIDER,
+    OPENAI_API_KEY,
+    OPENAI_MODEL,
+    OLLAMA_BASE_URL,
+    OLLAMA_MODEL,
+)
 from screenshot import prepare_vision_views
 from speech_to_text import transcribe_wav_bytes
 
 logger = logging.getLogger(__name__)
 
 _client: OpenAI | None = None
+_active_provider: str | None = None
 
 
 def _get_client() -> OpenAI:
-    global _client
-    if _client is None:
-        if not OPENAI_API_KEY:
-            raise RuntimeError(
-                "OPENAI_API_KEY environment variable is not set. "
-                "Please set it before running the application."
+    """Return an OpenAI-compatible client for the configured LLM provider."""
+    global _client, _active_provider
+    if _client is None or _active_provider != LLM_PROVIDER:
+        _active_provider = LLM_PROVIDER
+        if LLM_PROVIDER == "ollama":
+            _client = OpenAI(
+                base_url=f"{OLLAMA_BASE_URL}/v1",
+                api_key="ollama",
+                max_retries=0,  # fail fast — no confusing retry logs
             )
-        _client = OpenAI(api_key=OPENAI_API_KEY)
+            logger.info("Using Ollama at %s with model %s", OLLAMA_BASE_URL, OLLAMA_MODEL)
+        else:
+            if not OPENAI_API_KEY:
+                raise RuntimeError(
+                    "OPENAI_API_KEY is not set. "
+                    "Set it in Settings or switch LLM Provider to Ollama."
+                )
+            _client = OpenAI(api_key=OPENAI_API_KEY)
+            logger.info("Using OpenAI API with model %s", OPENAI_MODEL)
     return _client
+
+
+def _get_model() -> str:
+    """Return the active model name based on provider."""
+    return OLLAMA_MODEL if LLM_PROVIDER == "ollama" else OPENAI_MODEL
+
+
+_THINK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
+
+
+def _strip_thinking(text: str) -> str:
+    """Remove Qwen3/DeepSeek <think>…</think> blocks from output."""
+    cleaned = _THINK_RE.sub("", text)
+    # Handle unclosed <think> block (still generating thinking)
+    if "<think>" in cleaned:
+        cleaned = cleaned[:cleaned.index("<think>")]
+    return cleaned.strip()
 
 
 # ── Audio → Text ────────────────────────────────────────────────────────────
@@ -70,14 +106,17 @@ SYSTEM_PROMPT = (
 def analyze_text(
     text: str,
     last_exchange: tuple[str, str] | None = None,
+    on_token: "callable | None" = None,
 ) -> str:
     """Generate insights from a text transcript or question.
 
     Args:
         text: The current transcript/question to analyze.
         last_exchange: Optional (request, response) from the previous analysis.
+        on_token: If provided, called with accumulated text on each streamed chunk.
     """
     client = _get_client()
+    is_ollama = LLM_PROVIDER == "ollama"
 
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
@@ -90,13 +129,53 @@ def analyze_text(
 
     messages.append({"role": "user", "content": text})
 
-    response = client.chat.completions.create(
-        model=OPENAI_MODEL,
-        messages=messages,
-        temperature=0.2,
-        max_tokens=4096,
-    )
-    content = response.choices[0].message.content or ""
+    max_tok = 2048 if is_ollama else 4096
+    use_stream = on_token is not None
+
+    try:
+        response = client.chat.completions.create(
+            model=_get_model(),
+            messages=messages,
+            temperature=0.2,
+            max_tokens=max_tok,
+            stream=use_stream,
+        )
+    except NotFoundError:
+        raise RuntimeError(
+            f"Model '{OLLAMA_MODEL}' not found in Ollama.\n"
+            f"Pull it first:  ollama pull {OLLAMA_MODEL}\n"
+            "Or pick a different model in Settings \u2192 AI Model \u2192 Ollama."
+        )
+    except APIConnectionError as exc:
+        if is_ollama:
+            raise RuntimeError(
+                "Cannot connect to Ollama. Make sure Ollama is running:\n"
+                "  1. Install: irm https://ollama.com/install.ps1 | iex\n"
+                f"  2. Pull model: ollama pull {OLLAMA_MODEL}\n"
+                "  3. Start: ollama serve"
+            ) from exc
+        raise
+    except Exception as exc:
+        if is_ollama:
+            raise RuntimeError(
+                f"Ollama error: {exc}"
+            ) from exc
+        raise
+
+    if use_stream:
+        raw = ""
+        for chunk in response:
+            delta = chunk.choices[0].delta.content or ""
+            if delta:
+                raw += delta
+                cleaned = _strip_thinking(raw)
+                if cleaned:
+                    on_token(cleaned)
+        content = _strip_thinking(raw)
+    else:
+        content = response.choices[0].message.content or ""
+        content = _strip_thinking(content)
+
     logger.info("Text analysis complete.")
     return content.strip()
 
@@ -136,7 +215,7 @@ VISION_PROMPT = (
 )
 
 
-def analyze_screenshot(image_bytes: bytes) -> str:
+def analyze_screenshot(image_bytes: bytes, on_token: "callable | None" = None) -> str:
     """Send a screenshot to the vision model and return insights."""
     client = _get_client()
     views = prepare_vision_views(image_bytes)
@@ -172,17 +251,58 @@ def analyze_screenshot(image_bytes: bytes) -> str:
             }
         )
 
-    response = client.chat.completions.create(
-        model=OPENAI_MODEL,
-        messages=[
-            {
-                "role": "user",
-                "content": content,
-            }
-        ],
-        max_tokens=4096,
-    )
-    content = response.choices[0].message.content or ""
+    is_ollama = LLM_PROVIDER == "ollama"
+    max_tok = 2048 if is_ollama else 4096
+    use_stream = on_token is not None
+
+    try:
+        response = client.chat.completions.create(
+            model=_get_model(),
+            messages=[
+                {
+                    "role": "user",
+                    "content": content,
+                }
+            ],
+            max_tokens=max_tok,
+            stream=use_stream,
+        )
+    except NotFoundError:
+        raise RuntimeError(
+            f"Model '{OLLAMA_MODEL}' not found in Ollama.\n"
+            f"Pull it first:  ollama pull {OLLAMA_MODEL}\n"
+            "Or pick a different model in Settings \u2192 AI Model \u2192 Ollama."
+        )
+    except APIConnectionError as exc:
+        if is_ollama:
+            raise RuntimeError(
+                "Cannot connect to Ollama. Make sure Ollama is running:\n"
+                "  1. Install: irm https://ollama.com/install.ps1 | iex\n"
+                f"  2. Pull model: ollama pull {OLLAMA_MODEL}\n"
+                "  3. Start: ollama serve"
+            ) from exc
+        raise
+    except Exception as exc:
+        if is_ollama:
+            raise RuntimeError(
+                f"Ollama error: {exc}"
+            ) from exc
+        raise
+
+    if use_stream:
+        raw = ""
+        for chunk in response:
+            delta = chunk.choices[0].delta.content or ""
+            if delta:
+                raw += delta
+                cleaned = _strip_thinking(raw)
+                if cleaned:
+                    on_token(cleaned)
+        content = _strip_thinking(raw)
+    else:
+        content = response.choices[0].message.content or ""
+        content = _strip_thinking(content)
+
     logger.info("Screenshot analysis complete using %d view(s).", len(views))
     return content.strip()
 
@@ -193,6 +313,7 @@ def analyze_transcript(
     input_text: str,
     output_text: str,
     last_exchange: tuple[str, str] | None = None,
+    on_token: "callable | None" = None,
 ) -> str:
     """Analyze pre-transcribed text from mic (input) and system (output) streams."""
     if not input_text.strip() and not output_text.strip():
@@ -205,13 +326,20 @@ def analyze_transcript(
     if input_text.strip():
         combined += f"[YOU — what I already said]:\n{input_text.strip()}\n\n"
 
-    insights = analyze_text(combined, last_exchange=last_exchange)
-    return (
+    header = (
         "━━ Transcript ━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
         + combined
         + "━━ My Response ━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        + insights
     )
+
+    # Wrap on_token to prepend the transcript header
+    stream_cb = None
+    if on_token is not None:
+        def stream_cb(partial_text):
+            on_token(header + partial_text)
+
+    insights = analyze_text(combined, last_exchange=last_exchange, on_token=stream_cb)
+    return header + insights
 
 
 def analyze_dual_audio(

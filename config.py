@@ -17,8 +17,11 @@ _user = _load_settings()
 APP_NAME = "HelpAI"
 
 # ─── OpenAI / LLM ──────────────────────────────────────────────────────────
+LLM_PROVIDER = (_user.get("LLM_PROVIDER") or os.environ.get("LLM_PROVIDER", "openai")).strip().lower()
 OPENAI_API_KEY = _user.get("OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY", "")
 OPENAI_MODEL = _user.get("OPENAI_MODEL") or os.environ.get("OPENAI_MODEL", "gpt-4o")
+OLLAMA_BASE_URL = (_user.get("OLLAMA_BASE_URL") or os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")).rstrip("/")
+OLLAMA_MODEL = _user.get("OLLAMA_MODEL") or os.environ.get("OLLAMA_MODEL", "qwen3:8b")
 
 # ─── Speech-to-Text ────────────────────────────────────────────────────────
 XAI_API_KEY = _user.get("XAI_API_KEY") or os.environ.get("XAI_API_KEY", "")

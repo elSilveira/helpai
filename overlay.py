@@ -229,7 +229,7 @@ class OverlayApp:
         screen_w = self.root.winfo_screenwidth()
         screen_h = self.root.winfo_screenheight()
         bx = (screen_w - bar_w) // 2
-        by = screen_h - bar_h - 10
+        by = screen_h - bar_h - int(screen_h * 0.05) - 10
         self.root.geometry(f"{bar_w}x{bar_h}+{bx}+{by}")
 
         self._build_bar()
@@ -799,254 +799,74 @@ class OverlayApp:
         self.root.lift()
 
     # ═══════════════════════════════════════════════════════════════════
-    #  Settings Panel (integrated overlay)
+    #  Settings Panel — delegates to settings_ui.SettingsWindow
     # ═══════════════════════════════════════════════════════════════════
 
     def toggle_settings(self) -> None:
-        """Toggle the inline settings panel."""
+        """Open/close the shared settings window."""
         if self._settings_panel and self._settings_panel.winfo_exists():
             if self._settings_visible:
-                self._settings_panel.withdraw()
+                self._settings_panel.destroy()
+                self._settings_panel = None
                 self._settings_visible = False
                 return
-            self._settings_panel.deiconify()
-            self._settings_panel.lift()
-            self._settings_panel.attributes("-topmost", True)
-            self._settings_visible = True
-            self.root.lift()
-            return
 
         self._build_settings_panel()
 
     def _build_settings_panel(self) -> None:
-        """Build the settings panel as a Toplevel."""
-        import settings as store
-        from audio_capture import list_microphone_choices, list_speaker_choices
-        from settings_ui import HotkeyEntry
+        """Reuse the SettingsWindow component as a child of the overlay."""
+        from settings_ui import SettingsWindow
 
-        settings_data = store.load()
-        entries: dict[str, tk.Widget] = {}
-        choice_maps: dict[str, dict[str, str]] = {}
-
-        panel = tk.Toplevel(self.root)
-        panel.overrideredirect(True)
-        panel.attributes("-topmost", True)
-        panel.attributes("-alpha", INSIGHT_OVERLAY_OPACITY)
-        panel.configure(bg=_BASE)
-
-        pw, ph = 520, 590
-        screen_w = self.root.winfo_screenwidth()
-        screen_h = self.root.winfo_screenheight()
-        px = (screen_w - pw) // 2
-        py = (screen_h - ph) // 2
-        panel.geometry(f"{pw}x{ph}+{px}+{py}")
-        panel.after(50, lambda: _apply_exclusion(panel))
-
-        self._settings_panel = panel
-        self._settings_visible = True
-
-        font = (OVERLAY_FONT_FAMILY, 10)
-        font_bold = (OVERLAY_FONT_FAMILY, 10, "bold")
-
-        # ── Title bar ──────────────────────────────────────────────────
-        title_frame = tk.Frame(panel, bg=_PEACH, height=28)
-        title_frame.pack(fill=tk.X)
-        title_frame.pack_propagate(False)
-
-        title_label = tk.Label(
-            title_frame, text=f"  ⚙  Settings",
-            bg=_PEACH, fg=_MANTLE,
-            font=(OVERLAY_FONT_FAMILY, 9, "bold"), anchor="w",
-        )
-        title_label.pack(side=tk.LEFT, padx=2)
-
-        close_w = tk.Label(
-            title_frame, text=" ✕ ",
-            bg=_PEACH, fg=_MANTLE,
-            font=(OVERLAY_FONT_FAMILY, 9, "bold"), cursor="hand2",
-        )
-        close_w.pack(side=tk.RIGHT, padx=(0, 2))
-        close_w.bind("<Button-1>", lambda _: self.toggle_settings())
-
-        _make_draggable(panel, title_frame, title_label)
-        tk.Frame(panel, bg=_SURFACE1, height=1).pack(fill=tk.X)
-
-        # ── Scrollable content ─────────────────────────────────────────
-        canvas = tk.Canvas(panel, bg=_BASE, highlightthickness=0, bd=0)
-        scrollbar = tk.Scrollbar(panel, orient=tk.VERTICAL, command=canvas.yview)
-        content = tk.Frame(canvas, bg=_BASE)
-
-        content.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=content, anchor="nw", width=pw - 14)
-        canvas.configure(yscrollcommand=scrollbar.set)
-
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        canvas.pack(fill=tk.BOTH, expand=True)
-
-        # Mouse wheel scroll
-        def _on_mousewheel(e):
-            canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
-        canvas.bind_all("<MouseWheel>", _on_mousewheel)
-
-        # ── Section helpers ────────────────────────────────────────────
-        def _section(label: str, icon: str = ""):
-            frm = tk.Frame(content, bg=_BASE)
-            frm.pack(fill=tk.X, padx=14, pady=(14, 0))
-            tk.Label(
-                frm, text=f"{icon}  {label}" if icon else label,
-                bg=_BASE, fg=_ACCENT,
-                font=(OVERLAY_FONT_FAMILY, 9, "bold"), anchor="w",
-            ).pack(side=tk.LEFT)
-            tk.Frame(content, bg=_SURFACE1, height=1).pack(fill=tk.X, padx=14, pady=(3, 0))
-
-        def _text_row(label: str, key: str, show: str | None = None):
-            row = tk.Frame(content, bg=_BASE)
-            row.pack(fill=tk.X, padx=14, pady=2)
-            tk.Label(row, text=label, bg=_BASE, fg=_TEXT,
-                     font=font, width=20, anchor="w").pack(side=tk.LEFT)
-            entry = tk.Entry(row, bg=_SURFACE0, fg=_TEXT,
-                             insertbackground=_TEXT,
-                             font=font, relief=tk.FLAT, width=22, show=show,
-                             highlightthickness=1, highlightcolor=_ACCENT,
-                             highlightbackground=_SURFACE1)
-            entry.insert(0, settings_data.get(key, ""))
-            entry.pack(side=tk.LEFT, padx=(4, 0), ipady=2)
-            entries[key] = entry
-
-        def _hotkey_row(label: str, key: str):
-            row = tk.Frame(content, bg=_BASE)
-            row.pack(fill=tk.X, padx=14, pady=2)
-            tk.Label(row, text=label, bg=_BASE, fg=_TEXT,
-                     font=font, width=20, anchor="w").pack(side=tk.LEFT)
-            entry = HotkeyEntry(row, bg=_SURFACE0, fg=_TEXT,
-                                insertbackground=_TEXT,
-                                font=font, relief=tk.FLAT, width=22,
-                                highlightthickness=1, highlightcolor=_PINK,
-                                highlightbackground=_SURFACE1)
-            entry.insert(0, settings_data.get(key, ""))
-            entry.pack(side=tk.LEFT, padx=(4, 0), ipady=2)
-            entries[key] = entry
-
-        def _slider_row(label: str, key: str, lo: float, hi: float):
-            row = tk.Frame(content, bg=_BASE)
-            row.pack(fill=tk.X, padx=14, pady=2)
-            tk.Label(row, text=label, bg=_BASE, fg=_TEXT,
-                     font=font, width=20, anchor="w").pack(side=tk.LEFT)
-            var = tk.DoubleVar(value=settings_data.get(key, lo))
-            tk.Scale(row, from_=lo, to=hi, resolution=0.05, orient=tk.HORIZONTAL,
-                     variable=var, bg=_BASE, fg=_TEXT,
-                     troughcolor=_SURFACE0, highlightthickness=0,
-                     font=(OVERLAY_FONT_FAMILY, 7), length=160,
-                     activebackground=_ACCENT, sliderrelief=tk.FLAT,
-                     ).pack(side=tk.LEFT, padx=(4, 0))
-            entries[key] = var
-
-        def _combo_row(label: str, key: str, options, width: int = 18):
-            row = tk.Frame(content, bg=_BASE)
-            row.pack(fill=tk.X, padx=14, pady=2)
-            tk.Label(row, text=label, bg=_BASE, fg=_TEXT,
-                     font=font, width=20, anchor="w").pack(side=tk.LEFT)
-            from tkinter import ttk
-            if options and isinstance(options[0], tuple):
-                label_to_value = {label: value for label, value in options}
-                value_to_label = {value: label for label, value in options}
-                current_value = settings_data.get(key, options[0][1])
-                var = tk.StringVar(value=value_to_label.get(current_value, options[0][0]))
-                values = [label for label, _ in options]
-                choice_maps[key] = label_to_value
-            else:
-                var = tk.StringVar(value=settings_data.get(key, options[0]))
-                values = options
-            combo = ttk.Combobox(row, textvariable=var, values=options,
-                                 state="readonly", width=width, font=font)
-            combo.configure(values=values)
-            combo.pack(side=tk.LEFT, padx=(4, 0))
-            entries[key] = var
-
-        # ── Rows ───────────────────────────────────────────────────────
-        _section("Hotkeys", "⌨")
-        _hotkey_row("Audio Analysis", "HOTKEY_AUDIO_ANALYSIS")
-        _hotkey_row("Screenshot", "HOTKEY_SCREENSHOT_FEEDBACK")
-        _hotkey_row("Quick Input", "HOTKEY_QUICK_INPUT")
-
-        _section("OpenAI API", "🔑")
-        _text_row("API Key", "OPENAI_API_KEY", show="•")
-        _text_row("Model", "OPENAI_MODEL")
-
-        _section("Audio", "🎙")
-        _combo_row("Audio Source", "AUDIO_SOURCE", ["other", "me", "both"])
-        _combo_row("Microphone Device", "AUDIO_INPUT_DEVICE_ID", list_microphone_choices(), width=28)
-        _combo_row("Loopback Output", "AUDIO_OUTPUT_DEVICE_ID", list_speaker_choices(), width=28)
-
-        _section("Speech-to-Text", "🎤")
-        _combo_row("Provider", "STT_PROVIDER", ["auto", "local", "xai"])
-        _combo_row(
-            "Language", "STT_LANGUAGE",
-            [
-                ("Auto-detect", ""),
-                ("English", "en"),
-                ("Portuguese", "pt"),
-                ("Spanish", "es"),
-                ("French", "fr"),
-                ("German", "de"),
-                ("Italian", "it"),
-                ("Japanese", "ja"),
-                ("Chinese (Simplified)", "zh"),
-                ("Korean", "ko"),
-                ("Arabic", "ar"),
-                ("Russian", "ru"),
-                ("Hindi", "hi"),
-            ],
-            width=22,
-        )
-
-        _section("Appearance", "🎨")
-        _slider_row("Overlay Opacity", "INSIGHT_OVERLAY_OPACITY", 0.1, 1.0)
-
-        # ── Buttons ────────────────────────────────────────────────────
-        tk.Frame(content, bg=_BASE, height=8).pack(fill=tk.X)
-        tk.Frame(content, bg=_SURFACE1, height=1).pack(fill=tk.X, padx=14)
-
-        btn_frame = tk.Frame(content, bg=_BASE)
-        btn_frame.pack(fill=tk.X, padx=14, pady=(10, 14))
-
-        def _save():
-            result = dict(settings_data)
-            for k, widget in entries.items():
-                if isinstance(widget, (tk.DoubleVar, tk.IntVar, tk.StringVar)):
-                    if k in choice_maps:
-                        result[k] = choice_maps[k].get(widget.get(), "")
-                    else:
-                        result[k] = widget.get()
-                elif isinstance(widget, tk.Entry):
-                    result[k] = widget.get().strip()
-            store.save(result)
+        def _on_close():
+            """Called when SettingsWindow saves — just close it."""
+            self._settings_panel = None
+            self._settings_visible = False
             self.set_insight("✅ Settings saved. Restart HelpAI to apply changes.")
-            self.toggle_settings()
 
-        tk.Button(
-            btn_frame, text="💾  Save & Close", width=16,
-            bg=_ACCENT, fg=_MANTLE,
-            font=font_bold,
-            activebackground="#b4befe", activeforeground=_MANTLE,
-            relief=tk.FLAT, cursor="hand2", command=_save,
-        ).pack(side=tk.RIGHT, padx=(6, 0))
+        win = SettingsWindow.__new__(SettingsWindow)
+        win.on_save_and_launch = None
+        win.data = __import__("settings").load()
+        win._choice_maps = {}
+        win._entries = {}
+        win._nav_buttons = {}
+        win._panels = {}
+        win._active_section = "llm"
 
-        tk.Button(
-            btn_frame, text="Cancel", width=10,
-            bg=_SURFACE1, fg=_TEXT,
-            font=font,
-            activebackground=_SURFACE2, activeforeground=_TEXT,
-            relief=tk.FLAT, cursor="hand2",
-            command=self.toggle_settings,
-        ).pack(side=tk.RIGHT)
+        # Build as Toplevel under our root
+        win.root = tk.Toplevel(self.root)
+        win.root.title("Settings")
+        win.root.overrideredirect(True)
+        win.root.attributes("-topmost", True)
+        win.root.configure(bg="#1e1e2e")
+        win.root.resizable(False, False)
 
-        # Version info
-        tk.Label(
-            btn_frame, text=f"v{APP_VERSION}",
-            bg=_BASE, fg=_SURFACE2,
-            font=(OVERLAY_FONT_FAMILY, 8),
-        ).pack(side=tk.LEFT)
+        w, h = 620, 540
+        sx = (win.root.winfo_screenwidth() - w) // 2
+        sy = (win.root.winfo_screenheight() - h) // 2
+        win.root.geometry(f"{w}x{h}+{sx}+{sy}")
+
+        win._build()
+
+        # Override save to notify overlay
+        _orig_save = win._save
+        def _save_and_notify():
+            _orig_save()
+            _on_close()
+
+        _orig_save_launch = win._save_and_launch
+        def _save_launch_notify():
+            data = win._collect()
+            __import__("settings").save(data)
+            win.root.destroy()
+            _on_close()
+
+        win._save = _save_and_notify
+        win._save_and_launch = _save_launch_notify
+
+        win.root.after(50, lambda: _apply_exclusion(win.root))
+
+        self._settings_panel = win.root
+        self._settings_visible = True
 
         self.root.lift()
 

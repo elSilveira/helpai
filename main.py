@@ -24,7 +24,10 @@ from config import (
     HOTKEY_QUICK_INPUT,
     HOTKEY_SCREENSHOT_FEEDBACK,
     HOTKEY_SHOW_CONVERSATION,
+    LLM_PROVIDER,
     LOCAL_WHISPER_MODEL,
+    OLLAMA_BASE_URL,
+    OLLAMA_MODEL,
     SCREENSHOT_FEEDBACK_ENABLED,
 )
 from local_transcriber import is_model_cached, preload_model
@@ -154,6 +157,7 @@ def _action_audio_analysis() -> None:
             result = analyze_text(
                 selected.strip(),
                 last_exchange=_get_last_exchange(),
+                on_token=lambda t: app.schedule(app.set_insight, t),
             )
             _save_exchange(selected.strip(), result)
             app.schedule(app.set_insight, result)
@@ -186,6 +190,7 @@ def _action_audio_analysis() -> None:
         result = analyze_transcript(
             input_text, output_text,
             last_exchange=_get_last_exchange(),
+            on_token=lambda t: app.schedule(app.set_insight, t),
         )
         # Build combined request text for context extraction
         combined_req = ""
@@ -241,7 +246,10 @@ def _action_screenshot_feedback() -> None:
             "Analyzing Screen\n\nInspecting the captured screen and extracting the relevant context."
         )
 
-        result = analyze_screenshot(png)
+        result = analyze_screenshot(
+            png,
+            on_token=lambda t: app.schedule(app.set_insight, t),
+        )
         app.schedule(app.set_insight, result)
     except Exception as exc:
         logger.exception("Screenshot analysis error")
@@ -272,6 +280,7 @@ def _action_quick_input_submit(text: str) -> None:
             result = analyze_text(
                 text,
                 last_exchange=_get_last_exchange(),
+                on_token=lambda t: app.schedule(app.set_insight, t),
             )
             _save_exchange(text, result)
             app.schedule(app.set_insight, result)
@@ -429,6 +438,93 @@ def main() -> None:
     def _background_init() -> None:
         global capture
         import time
+
+        # Auto-start Ollama server if provider is ollama
+        if LLM_PROVIDER == "ollama":
+            import shutil, subprocess, os, json
+            import urllib.request
+            CREATE_NO_WINDOW = 0x08000000
+            ollama_dir = os.path.join(
+                os.environ.get("LOCALAPPDATA", ""),
+                "Programs", "Ollama",
+            )
+            if os.path.isdir(ollama_dir):
+                os.environ["PATH"] = (
+                    ollama_dir + os.pathsep + os.environ.get("PATH", "")
+                )
+
+            if shutil.which("ollama"):
+                # ── Ensure server is running ────────────────────────
+                def _ollama_reachable():
+                    try:
+                        r = urllib.request.urlopen(
+                            f"{OLLAMA_BASE_URL}/api/version", timeout=2)
+                        r.close()
+                        return True
+                    except Exception:
+                        return False
+
+                if _ollama_reachable():
+                    logger.info("Ollama is already running.")
+                else:
+                    splash.set_status("Starting Ollama server\u2026")
+                    try:
+                        subprocess.Popen(
+                            ["ollama", "serve"],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            creationflags=CREATE_NO_WINDOW,
+                        )
+                        logger.info("Ollama serve launched.")
+                    except Exception:
+                        logger.debug("ollama serve spawn failed.")
+                    # Wait up to 10s for the server to become reachable
+                    for _ in range(20):
+                        time.sleep(0.5)
+                        if _ollama_reachable():
+                            break
+
+                if not _ollama_reachable():
+                    logger.warning("Ollama server did not start.")
+                else:
+                    # ── Ensure model is pulled ──────────────────────
+                    splash.set_status("Checking Ollama model\u2026")
+                    model_ready = False
+                    try:
+                        req = urllib.request.urlopen(
+                            f"{OLLAMA_BASE_URL}/api/tags", timeout=5)
+                        data = json.loads(req.read())
+                        req.close()
+                        names = [m.get("name", "") for m in data.get("models", [])]
+                        # Match "qwen3:8b" against "qwen3:8b" or "qwen3:8b-..."
+                        model_ready = any(
+                            n == OLLAMA_MODEL or n.startswith(OLLAMA_MODEL + "-")
+                            for n in names
+                        )
+                    except Exception:
+                        logger.debug("Could not list Ollama models.")
+
+                    if not model_ready:
+                        splash.set_status(
+                            f"Downloading model {OLLAMA_MODEL}\u2026\n"
+                            "(first run only \u2014 cached afterwards)"
+                        )
+                        logger.info("Pulling Ollama model %s", OLLAMA_MODEL)
+                        try:
+                            subprocess.run(
+                                ["ollama", "pull", OLLAMA_MODEL],
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL,
+                                timeout=3600,
+                                creationflags=CREATE_NO_WINDOW,
+                            )
+                            logger.info("Model %s pulled.", OLLAMA_MODEL)
+                        except Exception:
+                            logger.exception("Failed to pull Ollama model.")
+                    else:
+                        logger.info("Ollama model %s is ready.", OLLAMA_MODEL)
+            else:
+                logger.warning("Ollama provider selected but ollama not found on PATH.")
 
         # Start audio capture
         if AUDIO_CAPTURE_ENABLED and check_audio_available():
