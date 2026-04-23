@@ -283,7 +283,7 @@ class OverlayApp:
         self.root.configure(bg=_CRUST, highlightbackground=_SURFACE1,
                             highlightthickness=1)
 
-        bar_w = 520
+        bar_w = 620
         bar_h = 40
         screen_w = self.root.winfo_screenwidth()
         screen_h = self.root.winfo_screenheight()
@@ -361,16 +361,7 @@ class OverlayApp:
         )
         self._bar_drag.pack(side=tk.LEFT, fill=tk.Y, padx=(2, 0))
 
-        # Status — clean, muted
-        self._status_label = tk.Label(
-            f, text=" Ready ",
-            bg=_CRUST, fg=_OVERLAY0,
-            font=(OVERLAY_FONT_FAMILY, 8),
-            anchor="w",
-        )
-        self._status_label.pack(side=tk.LEFT, padx=(4, 2), fill=tk.Y)
-
-        # ── Right-side buttons ─────────────────────────────────────────
+        # ── Right-side buttons (packed first = rightmost) ─────────────
 
         # Quit — subtle X, red on hover
         quit_btn = tk.Label(
@@ -414,33 +405,44 @@ class OverlayApp:
         # Thin separator
         tk.Frame(f, bg=_SURFACE1, width=1).pack(side=tk.RIGHT, fill=tk.Y, pady=8, padx=3)
 
-        # Quick Input — keyboard icon
-        input_btn = self._bar_icon_btn(f, "⌨", _SUBTEXT, "Quick Input (Ctrl+Shift+Enter)")
-        input_btn.pack(side=tk.RIGHT, padx=1)
-        input_btn.bind("<Button-1>", lambda _: self.open_quick_input())
-
-        # Screenshot — camera icon
-        screen_btn = self._bar_icon_btn(f, "📷", _SUBTEXT, "Screenshot Analysis (Ctrl+E)")
-        screen_btn.pack(side=tk.RIGHT, padx=1)
-        screen_btn.bind("<Button-1>", lambda _: self.on_screenshot())
-
-        # Audio — mic icon
-        audio_btn = self._bar_icon_btn(f, "🎙", _SUBTEXT, "Audio Analysis (Ctrl+D)")
-        audio_btn.pack(side=tk.RIGHT, padx=1)
-        audio_btn.bind("<Button-1>", lambda _: self.on_audio())
-
-        # Thin separator
-        tk.Frame(f, bg=_SURFACE1, width=1).pack(side=tk.RIGHT, fill=tk.Y, pady=8, padx=3)
-
-        # Toggle insight panel
-        self._insight_btn = self._bar_icon_btn(f, "📋", _ACCENT, "Insight")
-        self._insight_btn.pack(side=tk.RIGHT, padx=1)
-        self._insight_btn.bind("<Button-1>", lambda _: self.toggle_insight())
+        # ── Left-side buttons (packed first = leftmost) ───────────────
 
         # Toggle conversation panel
         self._conv_btn = self._bar_icon_btn(f, "💬", _GREEN, "Chat")
-        self._conv_btn.pack(side=tk.RIGHT, padx=1)
+        self._conv_btn.pack(side=tk.LEFT, padx=1)
         self._conv_btn.bind("<Button-1>", lambda _: self.toggle_conversation())
+
+        # Toggle insight panel
+        self._insight_btn = self._bar_icon_btn(f, "📋", _ACCENT, "Insight")
+        self._insight_btn.pack(side=tk.LEFT, padx=1)
+        self._insight_btn.bind("<Button-1>", lambda _: self.toggle_insight())
+
+        # Thin separator
+        tk.Frame(f, bg=_SURFACE1, width=1).pack(side=tk.LEFT, fill=tk.Y, pady=8, padx=3)
+
+        # Audio — mic icon
+        audio_btn = self._bar_icon_btn(f, "🎙", _SUBTEXT, "Audio Analysis (Ctrl+D)")
+        audio_btn.pack(side=tk.LEFT, padx=1)
+        audio_btn.bind("<Button-1>", lambda _: self.on_audio())
+
+        # Screenshot — camera icon
+        screen_btn = self._bar_icon_btn(f, "📷", _SUBTEXT, "Screenshot Analysis (Ctrl+E)")
+        screen_btn.pack(side=tk.LEFT, padx=1)
+        screen_btn.bind("<Button-1>", lambda _: self.on_screenshot())
+
+        # Quick Input — keyboard icon
+        input_btn = self._bar_icon_btn(f, "⌨", _SUBTEXT, "Quick Input (Ctrl+Shift+Enter)")
+        input_btn.pack(side=tk.LEFT, padx=1)
+        input_btn.bind("<Button-1>", lambda _: self.open_quick_input())
+
+        # ── Status label fills remaining center space ─────────────────
+        self._status_label = tk.Label(
+            f, text=" Ready ",
+            bg=_CRUST, fg=_OVERLAY0,
+            font=(OVERLAY_FONT_FAMILY, 8),
+            anchor=tk.CENTER,
+        )
+        self._status_label.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
     def _bar_icon_btn(self, parent, icon: str, fg_color: str, tooltip: str) -> tk.Label:
         """Create a minimal icon button for the control bar."""
@@ -1114,7 +1116,7 @@ class OverlayApp:
         win.configure(bg=_CRUST, highlightbackground=_SURFACE1,
                       highlightthickness=1)
 
-        w, h = 520, 160
+        w, h = 620, 160
         sx = self.root.winfo_x() + (self.root.winfo_width() - w) // 2
         sy = self.root.winfo_y() - h - 8
         win.geometry(f"{w}x{h}+{sx}+{sy}")
