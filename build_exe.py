@@ -43,6 +43,9 @@ HIDDEN_IMPORTS = [
     "onnxruntime",
     "huggingface_hub",
     "av",
+    "nvidia.cublas",
+    "nvidia.cudnn",
+    "nvidia.cuda_nvrtc",
 ]
 
 COLLECT_SUBMODULE_PACKAGES = [

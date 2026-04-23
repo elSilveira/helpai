@@ -529,12 +529,28 @@ class OverlayApp:
         self.on_clear_conversation()
 
     def _write_conv(self, text: str) -> None:
-        """Internal: write text into conversation ScrolledText."""
+        """Internal: write text into conversation ScrolledText.
+
+        Uses a diff-based approach: if the new text starts with the same
+        content, only the changed tail is rewritten.  This prevents the
+        flicker caused by full delete+insert on every live update.
+        """
         if self._conv_text is None:
             return
         self._conv_text.config(state=tk.NORMAL)
-        self._conv_text.delete("1.0", tk.END)
-        self._conv_text.insert(tk.END, text)
+        existing = self._conv_text.get("1.0", tk.END).rstrip("\n")
+        if text.startswith(existing) and existing:
+            # Only append the new tail.
+            tail = text[len(existing):]
+            if tail:
+                self._conv_text.insert(tk.END, tail)
+        elif existing.startswith(text) and len(existing) > len(text):
+            # Text got shorter (backup replaced text) — full rewrite.
+            self._conv_text.delete("1.0", tk.END)
+            self._conv_text.insert(tk.END, text)
+        else:
+            self._conv_text.delete("1.0", tk.END)
+            self._conv_text.insert(tk.END, text)
         self._conv_text.config(state=tk.DISABLED)
         self._conv_text.see(tk.END)
 

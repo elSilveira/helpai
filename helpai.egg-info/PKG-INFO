@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: helpai
-Version: 1.4.0
+Version: 1.5.0
 Summary: Internal QA and training overlay for audio, screenshot, and quick-input analysis on Windows.
 Author: HelpAI Team
 Classifier: Programming Language :: Python :: 3

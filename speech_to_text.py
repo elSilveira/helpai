@@ -175,7 +175,7 @@ def _use_local_fallback_on_error(provider: str | None) -> bool:
     return _normalize_provider_name(provider or STT_PROVIDER) == "auto"
 
 
-def transcribe_audio_array(audio: np.ndarray, sample_rate: int = 16000, provider: str | None = None) -> str:
+def transcribe_audio_array(audio: np.ndarray, sample_rate: int = 16000, provider: str | None = None, fast: bool = False) -> str:
     """Transcribe an in-memory audio buffer with the configured STT backend."""
     normalized_audio = _normalize_audio_array(audio)
     if not _audio_has_speech(normalized_audio):
@@ -184,7 +184,7 @@ def transcribe_audio_array(audio: np.ndarray, sample_rate: int = 16000, provider
     lang = _active_language()
     active_provider = get_active_stt_provider(provider)
     if active_provider == "local":
-        return transcribe_local(normalized_audio, sample_rate, language=lang)
+        return transcribe_local(normalized_audio, sample_rate, language=lang, fast=fast)
 
     try:
         return _transcribe_with_xai(_audio_array_to_wav_bytes(normalized_audio, sample_rate), language=lang)

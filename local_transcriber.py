@@ -74,7 +74,7 @@ def preload_model() -> None:
     _get_model()
 
 
-def transcribe_local(audio: np.ndarray, sample_rate: int = 16000, language: str = "en") -> str:
+def transcribe_local(audio: np.ndarray, sample_rate: int = 16000, language: str = "en", fast: bool = False) -> str:
     """Transcribe a numpy audio array using the local Whisper model.
 
     Args:
@@ -82,6 +82,8 @@ def transcribe_local(audio: np.ndarray, sample_rate: int = 16000, language: str 
         sample_rate: Sample rate of the audio.
         language: BCP-47 language code passed to Whisper (e.g. 'en', 'es').  Use
             empty string or None to enable Whisper's own language auto-detection.
+        fast: When True, use beam_size=1 for lower latency (live draft mode).
+            When False (default), use beam_size=3 for higher accuracy (commits).
 
     Returns:
         Transcribed text, or empty string if silence/hallucination.
@@ -111,8 +113,14 @@ def transcribe_local(audio: np.ndarray, sample_rate: int = 16000, language: str 
 
     model = _get_model()
     with _transcribe_lock:
+        # On GPU, always use full quality — it's fast enough for real-time.
+        # On CPU, drafts use beam_size=1 for speed; commits use beam_size=3.
+        if LOCAL_WHISPER_DEVICE == "cuda":
+            _beam = 3
+        else:
+            _beam = 1 if fast else 3
         transcribe_kwargs = dict(
-            beam_size=3,
+            beam_size=_beam,
             language=_lang,
             condition_on_previous_text=False,
             no_speech_threshold=0.6,
@@ -131,18 +139,20 @@ def transcribe_local(audio: np.ndarray, sample_rate: int = 16000, language: str 
             transcribe_kwargs["hotwords"] = _hotwords
         segments, info = model.transcribe(audio, **transcribe_kwargs)
 
-    parts = []
-    for seg in segments:
-        text = seg.text.strip()
-        if not text:
-            continue
-        if is_hallucination(text):
-            logger.debug("Filtered hallucination: '%s'", text)
-            continue
-        if is_low_quality_segment(seg):
-            logger.debug("Filtered low-quality (logprob=%.2f, no_speech=%.2f): '%s'",
-                         seg.avg_logprob, seg.no_speech_prob, text)
-            continue
-        parts.append(text)
+        # Consume the generator inside the lock — segments is lazy and does
+        # GPU work during iteration, so it must stay serialized.
+        parts = []
+        for seg in segments:
+            text = seg.text.strip()
+            if not text:
+                continue
+            if is_hallucination(text):
+                logger.debug("Filtered hallucination: '%s'", text)
+                continue
+            if is_low_quality_segment(seg):
+                logger.debug("Filtered low-quality (logprob=%.2f, no_speech=%.2f): '%s'",
+                             seg.avg_logprob, seg.no_speech_prob, text)
+                continue
+            parts.append(text)
 
     return normalize_transcript_text(" ".join(parts))

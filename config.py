@@ -42,9 +42,57 @@ AUDIO_INPUT_DEVICE_ID = _user.get("AUDIO_INPUT_DEVICE_ID", "")
 AUDIO_OUTPUT_DEVICE_ID = _user.get("AUDIO_OUTPUT_DEVICE_ID", "")
 
 # ─── Local Whisper (faster-whisper) ─────────────────────────────────────────
-LOCAL_WHISPER_MODEL = _user.get("LOCAL_WHISPER_MODEL", "small.en")  # tiny.en / base.en / small.en / medium.en
-LOCAL_WHISPER_DEVICE = "cpu"       # "cpu" or "cuda"
-LOCAL_WHISPER_COMPUTE = "int8"     # int8 is fastest on CPU
+LOCAL_WHISPER_MODEL = _user.get("LOCAL_WHISPER_MODEL", "large-v3-turbo")  # tiny.en / base.en / small.en / medium.en / large-v3-turbo
+LOCAL_WHISPER_DEVICE = _user.get("LOCAL_WHISPER_DEVICE", "auto")  # "auto" / "cpu" / "cuda"
+
+def _resolve_whisper_device(device: str) -> tuple[str, str]:
+    """Resolve device and compute type. 'auto' prefers CUDA when available."""
+    resolved_device = "cpu"
+    resolved_compute = "int8"
+
+    if device in ("auto", "cuda"):
+        try:
+            import ctranslate2
+            if ctranslate2.get_cuda_device_count() > 0:
+                resolved_device = "cuda"
+                resolved_compute = "float16"
+        except Exception:
+            if device == "cuda":
+                import logging
+                logging.getLogger(__name__).warning(
+                    "CUDA requested but not available — falling back to CPU."
+                )
+
+    # When using CUDA, ensure the pip-installed NVIDIA DLLs are discoverable.
+    if resolved_device == "cuda":
+        _add_nvidia_dll_paths()
+
+    return resolved_device, resolved_compute
+
+
+def _add_nvidia_dll_paths() -> None:
+    """Add pip-installed NVIDIA library directories to the DLL search path."""
+    import glob
+    import os
+    import sys
+
+    site_packages = [p for p in sys.path if "site-packages" in p]
+    for sp in site_packages:
+        nvidia_dir = os.path.join(sp, "nvidia")
+        if not os.path.isdir(nvidia_dir):
+            continue
+        bin_dirs = glob.glob(os.path.join(nvidia_dir, "*", "bin"))
+        for bin_dir in bin_dirs:
+            if bin_dir not in os.environ.get("PATH", ""):
+                os.environ["PATH"] = bin_dir + os.pathsep + os.environ.get("PATH", "")
+                # Also use os.add_dll_directory on Python 3.8+ Windows
+                try:
+                    os.add_dll_directory(bin_dir)
+                except (OSError, AttributeError):
+                    pass
+        break  # only need the first site-packages
+
+LOCAL_WHISPER_DEVICE, LOCAL_WHISPER_COMPUTE = _resolve_whisper_device(LOCAL_WHISPER_DEVICE)
 
 # ─── Screenshot / Visual Feedback ──────────────────────────────────────────
 SCREENSHOT_FEEDBACK_ENABLED = _user.get("SCREENSHOT_FEEDBACK_ENABLED", True)

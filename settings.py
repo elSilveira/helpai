@@ -63,7 +63,8 @@ DEFAULTS = {
     "AUDIO_SOURCE": "other",
     "AUDIO_INPUT_DEVICE_ID": "",
     "AUDIO_OUTPUT_DEVICE_ID": "",
-    "LOCAL_WHISPER_MODEL": "small.en",
+    "LOCAL_WHISPER_MODEL": "large-v3-turbo",
+    "LOCAL_WHISPER_DEVICE": "auto",
 }
 
 _cache: dict | None = None

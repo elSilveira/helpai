@@ -302,6 +302,9 @@ def on_quick_input_hotkey() -> None:
 
 # ── Live transcript callback ────────────────────────────────────────────────
 
+_last_transcript_text: str = ""
+
+
 def _format_paragraphs(raw: str) -> str:
     """Format transcript lines into paragraphs using sentence endings."""
     segments = [segment.strip() for segment in raw.strip().split("\n") if segment.strip()]
@@ -321,6 +324,7 @@ def _format_paragraphs(raw: str) -> str:
 
 def _on_transcript_update(input_text: str, output_text: str) -> None:
     """Called by ContinuousCapture when new transcript text is available."""
+    global _last_transcript_text
     if app is None:
         return
     lines = []
@@ -328,9 +332,15 @@ def _on_transcript_update(input_text: str, output_text: str) -> None:
         lines.append(f"🔊 [THEM]:\n{_format_paragraphs(output_text)}")
     if AUDIO_SOURCE in ("me", "both") and input_text.strip():
         lines.append(f"🎙 [YOU]:\n{_format_paragraphs(input_text)}")
-    if lines:
-        app.schedule(app.set_conversation, "\n\n".join(lines))
-        app.schedule(app.set_status, "Transcribing…")
+    if not lines:
+        return
+    new_text = "\n\n".join(lines)
+    # Skip scheduling if the text hasn't actually changed.
+    if new_text == _last_transcript_text:
+        return
+    _last_transcript_text = new_text
+    app.schedule(app.set_conversation, new_text)
+    app.schedule(app.set_status, "Transcribing…")
 
 
 def _refresh_audio_levels() -> None:

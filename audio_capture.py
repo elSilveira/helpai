@@ -40,6 +40,7 @@ from config import (
     AUDIO_RING_BUFFER_SECONDS,
     AUDIO_SAMPLE_RATE,
     AUDIO_SOURCE,
+    LOCAL_WHISPER_DEVICE,
     TRANSCRIPTION_INTERVAL,
 )
 
@@ -49,14 +50,23 @@ logger = logging.getLogger(__name__)
 # of WASAPI buffer overruns when local transcription briefly spikes CPU usage.
 _CHUNK_SEC = 0.25
 _PRE_ROLL_SEC = 0.75
-_SEAL_OVERLAP_SEC = 1.5   # tail of sealed utterance kept as lead-in for next window
+_SEAL_OVERLAP_SEC = 2.0   # tail of sealed utterance kept as lead-in for next window
 _MAX_UTTERANCE_SEC = max(30, min(AUDIO_RING_BUFFER_SECONDS, 60))
 _MIN_TRANSCRIBE_SEC = 0.35
 _MIN_TRANSCRIBE_RMS = 0.005
 _VOICE_ACTIVITY_RMS = 0.004
 _VOICE_ACTIVITY_PEAK = 0.02
-_SILENCE_COMMIT_SEC = 2.0
+_SILENCE_COMMIT_SEC = 1.8
 _PUNCTUATION_COMMIT_SEC = 0.8
+# Auto-seal long utterances at short natural pauses to keep Whisper fast
+# and avoid ever-growing windows.  Once the utterance exceeds
+# _AUTO_SEAL_AFTER_SEC, any silence >= _AUTO_SEAL_SILENCE_SEC triggers a seal.
+_AUTO_SEAL_AFTER_SEC = 12.0
+_AUTO_SEAL_SILENCE_SEC = 0.45
+# Versioned pipeline: force-split continuous speech so Whisper always processes
+# bounded audio.  The front is committed; the tail stays as overlap context.
+_VERSION_AFTER_SEC = 10.0
+_VERSION_OVERLAP_SEC = 2.5
 _LEVEL_SMOOTHING = 0.35
 _LEVEL_DECAY_PER_SEC = 0.85
 _METER_RMS_CEILING = 0.05
@@ -131,6 +141,30 @@ def _compose_transcript(committed: str, draft: str) -> str:
     if committed and draft:
         return f"{committed}\n{draft}"
     return committed or draft
+
+
+class _CommittedSegment:
+    """One committed utterance with a fast (instant) and optional clean (backup) transcription."""
+    __slots__ = (
+        "fast_text", "clean_text", "audio", "sample_rate", "_backup_submitted",
+    )
+
+    def __init__(self, fast_text: str, audio: np.ndarray | None = None, sample_rate: int = 16000):
+        self.fast_text = fast_text
+        self.clean_text: str | None = None
+        self.audio = audio.copy() if audio is not None else None
+        self.sample_rate = sample_rate
+        self._backup_submitted = False
+
+    @property
+    def text(self) -> str:
+        return self.clean_text if self.clean_text is not None else self.fast_text
+
+
+def _rebuild_from_segments(segments: list[_CommittedSegment]) -> str:
+    """Join committed segments into a single transcript string."""
+    parts = [seg.text for seg in segments if seg.text]
+    return "\n".join(parts)
 
 
 def _stabilize_draft_text(previous: str, candidate: str) -> str:
@@ -364,6 +398,29 @@ class _RingBuffer:
             result = result[-target_frames:]
         return result
 
+    def split_front(self, seconds: float) -> np.ndarray | None:
+        """Remove and return the first *seconds* of audio, keeping the rest."""
+        target_frames = int(seconds * self._sr)
+        with self._lock:
+            if self._total_frames <= target_frames:
+                return None
+            front_chunks: list[np.ndarray] = []
+            collected = 0
+            while self._chunks and collected < target_frames:
+                chunk = self._chunks.popleft()
+                front_chunks.append(chunk)
+                collected += chunk.shape[0]
+                self._total_frames -= chunk.shape[0]
+            if not front_chunks:
+                return None
+            result = np.concatenate(front_chunks, axis=0)
+            if result.shape[0] > target_frames:
+                excess = result[target_frames:]
+                result = result[:target_frames]
+                self._chunks.appendleft(excess)
+                self._total_frames += excess.shape[0]
+            return result
+
     @property
     def duration(self) -> float:
         return self._total_frames / self._sr
@@ -424,16 +481,81 @@ class _LiveStreamState:
             return None, silence, False
         return self._utterance.snapshot_all(), silence, True
 
+    def snapshot_recent_live(self, now: float, max_seconds: float) -> tuple[np.ndarray | None, float, bool]:
+        """Return only the most recent *max_seconds* of the active utterance.
+
+        Used for low-latency live draft updates — keeps Whisper processing time
+        bounded regardless of utterance length.
+        """
+        with self._lock:
+            silence = max(0.0, now - self._last_voice_at)
+            is_open = self._utterance_open
+        if not is_open:
+            return None, silence, False
+        return self._utterance.snapshot_recent(max_seconds), silence, True
+
+    @property
+    def utterance_duration(self) -> float:
+        """Current utterance length in seconds (0 when closed)."""
+        with self._lock:
+            if not self._utterance_open:
+                return 0.0
+            return self._utterance.duration
+
+    def force_version(self, keep_seconds: float) -> np.ndarray | None:
+        """Split off the front of a long utterance for committed transcription.
+
+        The utterance stays open with approximately *keep_seconds* of audio
+        remaining as overlap context for the next transcription cycle.
+        Returns the removed front portion, or None if not enough audio.
+        """
+        with self._lock:
+            if not self._utterance_open:
+                return None
+            dur = self._utterance.duration
+            split_sec = dur - keep_seconds
+            if split_sec <= 0:
+                return None
+            return self._utterance.split_front(split_sec)
+
+    def is_idle_ready(self, min_silence_sec: float) -> bool:
+        """Return True when the utterance is open and silence threshold is reached.
+
+        For long utterances (> _AUTO_SEAL_AFTER_SEC) a shorter silence threshold
+        is used so they get segmented at natural pauses rather than growing
+        indefinitely.
+        """
+        with self._lock:
+            if not self._utterance_open:
+                return False
+            silence = max(0.0, time.monotonic() - self._last_voice_at)
+            effective = (
+                _AUTO_SEAL_SILENCE_SEC
+                if self._utterance.duration > _AUTO_SEAL_AFTER_SEC
+                else min_silence_sec
+            )
+            return silence >= effective
+
     def seal_if_idle(self, now: float, min_silence_sec: float) -> tuple[np.ndarray | None, float, bool]:
         """Close and return the current utterance once it has gone idle.
 
         Instead of fully clearing the buffer, the last _SEAL_OVERLAP_SEC seconds
         of audio are retained as the lead-in for the next utterance so that
         tail words clipped by the VAD can be re-transcribed with more context.
+
+        For long utterances (> _AUTO_SEAL_AFTER_SEC) a shorter silence threshold
+        is used so they get segmented at natural pauses.
         """
         with self._lock:
             silence = max(0.0, now - self._last_voice_at)
-            if not self._utterance_open or silence < min_silence_sec:
+            if not self._utterance_open:
+                return None, silence, False
+            effective = (
+                _AUTO_SEAL_SILENCE_SEC
+                if self._utterance.duration > _AUTO_SEAL_AFTER_SEC
+                else min_silence_sec
+            )
+            if silence < effective:
                 return None, silence, False
             frames = self._utterance.snapshot_all()
             # Keep an overlap tail — do NOT fully clear the buffer.
@@ -495,6 +617,10 @@ class ContinuousCapture:
         # overlap tail that is re-transcribed at the start of each new window.
         self._last_committed_input = ""
         self._last_committed_output = ""
+        # Segment-based committed storage for dual-quality (fast + clean) pipeline.
+        self._segments_input: list[_CommittedSegment] = []
+        self._segments_output: list[_CommittedSegment] = []
+        self._backup_executor: "ThreadPoolExecutor | None" = None
 
         self._running = False
         self._mic_thread: threading.Thread | None = None
@@ -502,6 +628,9 @@ class ContinuousCapture:
         self._transcription_thread: threading.Thread | None = None
         self._capture_input = AUDIO_SOURCE in ("me", "both")
         self._capture_output = AUDIO_SOURCE in ("other", "both")
+        # Event that fires immediately when silence crosses the commit threshold.
+        # This lets the transcription loop wake up without waiting the full interval.
+        self._transcription_trigger = threading.Event()
 
     # ── lifecycle ───────────────────────────────────────────────────────
 
@@ -539,9 +668,12 @@ class ContinuousCapture:
 
     def stop(self) -> None:
         self._running = False
+        self._transcription_trigger.set()  # unblock the loop if waiting
         for t in (self._mic_thread, self._loopback_thread, self._transcription_thread):
             if t and t.is_alive():
                 t.join(timeout=3)
+        if self._backup_executor is not None:
+            self._backup_executor.shutdown(wait=False)
         logger.info("Continuous capture stopped.")
 
     @property
@@ -589,6 +721,8 @@ class ContinuousCapture:
                     data = rec.record(numframes=chunk_frames)
                     self._input_buf.append(data)
                     self._input_live_state.record_chunk(data)
+                    if self._transcribe_fn and self._input_live_state.is_idle_ready(_SILENCE_COMMIT_SEC):
+                        self._transcription_trigger.set()
         except Exception:
             logger.exception("Microphone capture failed.")
 
@@ -614,6 +748,8 @@ class ContinuousCapture:
                     data = rec.record(numframes=chunk_frames)
                     self._output_buf.append(data)
                     self._output_live_state.record_chunk(data)
+                    if self._transcribe_fn and self._output_live_state.is_idle_ready(_SILENCE_COMMIT_SEC):
+                        self._transcription_trigger.set()
         except Exception:
             logger.exception(
                 "Loopback capture failed — system audio will not be recorded. "
@@ -649,6 +785,7 @@ class ContinuousCapture:
         now: float,
         *,
         force_commit: bool = False,
+        audio_for_backup: np.ndarray | None = None,
     ) -> bool:
         """Update committed/draft transcript state for one audio stream."""
         if stream == "input":
@@ -697,6 +834,10 @@ class ContinuousCapture:
                 if commit_text:
                     transcript = _append_committed_text(transcript, commit_text)
                     setattr(self, transcript_attr, transcript)
+                    # Also store as a segment for backup pipeline.
+                    seg_list = self._segments_input if stream == "input" else self._segments_output
+                    seg = _CommittedSegment(commit_text, audio=audio_for_backup, sample_rate=self.sample_rate)
+                    seg_list.append(seg)
                 setattr(self, last_committed_attr, draft)
                 setattr(self, draft_attr, "")
                 setattr(self, started_attr, None)
@@ -707,24 +848,94 @@ class ContinuousCapture:
     def _current_transcripts(self) -> tuple[str, str]:
         """Return committed transcripts with any active in-progress drafts."""
         with self._transcript_lock:
+            committed_in = _rebuild_from_segments(self._segments_input) if self._segments_input else self._transcript_input
+            committed_out = _rebuild_from_segments(self._segments_output) if self._segments_output else self._transcript_output
             return (
-                _compose_transcript(self._transcript_input, self._draft_input),
-                _compose_transcript(self._transcript_output, self._draft_output),
+                _compose_transcript(committed_in, self._draft_input),
+                _compose_transcript(committed_out, self._draft_output),
             )
 
+    def _submit_backup(self, segment: _CommittedSegment) -> None:
+        """Submit a clean (beam_size=3) re-transcription of a committed segment."""
+        if not self._transcribe_fn or segment.audio is None:
+            return
+        if self._backup_executor is None:
+            from concurrent.futures import ThreadPoolExecutor
+            self._backup_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="whisper-backup")
+        self._backup_executor.submit(self._apply_backup, segment)
+
+    def _apply_backup(self, segment: _CommittedSegment) -> None:
+        """Re-transcribe with full quality and swap in the clean text."""
+        try:
+            try:
+                clean = self._transcribe_fn(segment.audio, segment.sample_rate, fast=False)
+            except TypeError:
+                clean = self._transcribe_fn(segment.audio, segment.sample_rate)
+            if not clean:
+                return
+            with self._transcript_lock:
+                segment.clean_text = clean
+                # Free the audio — no longer needed.
+                segment.audio = None
+                # Rebuild committed strings from segments so _compose_transcript
+                # picks up the clean version.
+                self._transcript_input = _rebuild_from_segments(self._segments_input)
+                self._transcript_output = _rebuild_from_segments(self._segments_output)
+            if self._on_transcript:
+                input_text, output_text = self._current_transcripts()
+                self._on_transcript(input_text, output_text)
+        except Exception:
+            logger.exception("Backup transcription failed.")
+
+    def _has_active_utterance(self) -> bool:
+        """Return True when at least one stream has an open utterance."""
+        if AUDIO_SOURCE in ("me", "both") and self._input_live_state.utterance_duration > 0:
+            return True
+        if AUDIO_SOURCE in ("other", "both") and self._output_live_state.utterance_duration > 0:
+            return True
+        return False
+
     def _transcription_loop(self) -> None:
-        """Periodically transcribe the active utterance for each capture stream."""
+        """Continuously transcribe active utterances with minimal delay.
+
+        When speech is active the loop runs as fast as Whisper can keep up —
+        no fixed interval sleep.  A short minimum gap (_MIN_DRAFT_INTERVAL_SEC)
+        prevents CPU spin when Whisper is very fast on tiny chunks.  When idle
+        (no open utterance) the loop sleeps up to TRANSCRIPTION_INTERVAL or
+        until the trigger event fires.
+
+        Long utterances are handled by a versioned pipeline: once an utterance
+        exceeds _VERSION_AFTER_SEC the front is split off and committed while a
+        short overlap tail stays in the buffer.  Each Whisper call stays bounded
+        (~10 s) regardless of how long someone speaks.
+        """
         from concurrent.futures import ThreadPoolExecutor
 
+        _MIN_DRAFT_INTERVAL_SEC = 0.3   # floor between back-to-back drafts
+
         executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="whisper")
+        last_transcribe_at = 0.0
 
         while self._running:
-            time.sleep(TRANSCRIPTION_INTERVAL)
+            # When speech is active, only wait the minimum gap so drafts update
+            # as fast as Whisper can process.  When idle, sleep the full interval
+            # or until the trigger fires (silence-commit detected).
+            if self._has_active_utterance():
+                elapsed = time.monotonic() - last_transcribe_at
+                gap = max(0, _MIN_DRAFT_INTERVAL_SEC - elapsed)
+                if gap > 0:
+                    self._transcription_trigger.wait(timeout=gap)
+                    self._transcription_trigger.clear()
+            else:
+                self._transcription_trigger.wait(timeout=TRANSCRIPTION_INTERVAL)
+                self._transcription_trigger.clear()
+
             if not self._running:
                 break
             now = time.monotonic()
 
             stream_windows: dict[str, tuple[np.ndarray | None, float, bool]] = {}
+            any_versioned = False
 
             if AUDIO_SOURCE in ("me", "both"):
                 input_frames, input_silence, input_sealed = self._input_live_state.seal_if_idle(
@@ -733,6 +944,11 @@ class ContinuousCapture:
                 )
                 if input_sealed:
                     stream_windows["input"] = (input_frames, input_silence, True)
+                elif self._input_live_state.utterance_duration > _VERSION_AFTER_SEC:
+                    version_frames = self._input_live_state.force_version(_VERSION_OVERLAP_SEC)
+                    if version_frames is not None:
+                        stream_windows["input"] = (version_frames, 0.0, True)
+                        any_versioned = True
                 else:
                     input_frames, input_silence, input_open = self._input_live_state.snapshot_live(now)
                     if input_open:
@@ -745,6 +961,11 @@ class ContinuousCapture:
                 )
                 if output_sealed:
                     stream_windows["output"] = (output_frames, output_silence, True)
+                elif self._output_live_state.utterance_duration > _VERSION_AFTER_SEC:
+                    version_frames = self._output_live_state.force_version(_VERSION_OVERLAP_SEC)
+                    if version_frames is not None:
+                        stream_windows["output"] = (version_frames, 0.0, True)
+                        any_versioned = True
                 else:
                     output_frames, output_silence, output_open = self._output_live_state.snapshot_live(now)
                     if output_open:
@@ -753,10 +974,12 @@ class ContinuousCapture:
             if not stream_windows:
                 continue
 
-            def _do_transcribe(stream: str, frames: np.ndarray | None) -> str:
+            def _do_transcribe(stream: str, frames: np.ndarray | None, fast: bool = False) -> str:
                 if frames is None:
                     return ""
                 try:
+                    return self._transcribe_fn(frames, self.sample_rate, fast=fast)
+                except TypeError:
                     return self._transcribe_fn(frames, self.sample_rate)
                 except Exception:
                     logger.exception("Background %s transcription failed.", stream)
@@ -766,12 +989,29 @@ class ContinuousCapture:
             results: dict[str, str] = {}
             for stream, (frames, _silence, sealed) in stream_windows.items():
                 if _is_transcribable_window(frames, self.sample_rate, allow_short=sealed):
-                    futures[stream] = executor.submit(_do_transcribe, stream, frames)
+                    # Drafts use fast mode (beam_size=1); sealed commits use
+                    # full quality (beam_size=3) — backup will refine later.
+                    futures[stream] = executor.submit(_do_transcribe, stream, frames, not sealed)
                 else:
                     results[stream] = ""
 
             for stream, future in futures.items():
                 results[stream] = future.result()
+            last_transcribe_at = time.monotonic()
+
+            # If Whisper took a while for a live draft and a seal is now ready,
+            # discard the stale draft result and immediately process the seal.
+            stale = False
+            for stream, (frames, _silence, sealed) in stream_windows.items():
+                if sealed:
+                    continue
+                state = self._input_live_state if stream == "input" else self._output_live_state
+                if state.is_idle_ready(_SILENCE_COMMIT_SEC):
+                    stale = True
+                    break
+            if stale:
+                self._transcription_trigger.set()
+                continue
 
             changed = False
             if "input" in stream_windows:
@@ -782,6 +1022,7 @@ class ContinuousCapture:
                     input_silence,
                     now,
                     force_commit=input_sealed,
+                    audio_for_backup=_frames if input_sealed else None,
                 ) or changed
             if "output" in stream_windows:
                 _frames, output_silence, output_sealed = stream_windows["output"]
@@ -791,7 +1032,18 @@ class ContinuousCapture:
                     output_silence,
                     now,
                     force_commit=output_sealed,
+                    audio_for_backup=_frames if output_sealed else None,
                 ) or changed
+
+            # Submit backup (clean/beam_size=3) for newly committed segments
+            # that haven't been submitted yet.
+            # On CUDA, skip backup entirely — full quality is already real-time.
+            if LOCAL_WHISPER_DEVICE != "cuda":
+                for seg_list in (self._segments_input, self._segments_output):
+                    for seg in seg_list:
+                        if not seg._backup_submitted and seg.audio is not None:
+                            seg._backup_submitted = True
+                            self._submit_backup(seg)
 
             if changed and self._on_transcript:
                 input_text, output_text = self._current_transcripts()
@@ -807,8 +1059,14 @@ class ContinuousCapture:
         """Return and clear accumulated transcript."""
         with self._transcript_lock:
             result = (
-                _compose_transcript(self._transcript_input, self._draft_input),
-                _compose_transcript(self._transcript_output, self._draft_output),
+                _compose_transcript(
+                    _rebuild_from_segments(self._segments_input) if self._segments_input else self._transcript_input,
+                    self._draft_input,
+                ),
+                _compose_transcript(
+                    _rebuild_from_segments(self._segments_output) if self._segments_output else self._transcript_output,
+                    self._draft_output,
+                ),
             )
             self._transcript_input = ""
             self._transcript_output = ""
@@ -818,6 +1076,8 @@ class ContinuousCapture:
             self._draft_output_started_at = None
             self._last_committed_input = ""
             self._last_committed_output = ""
+            self._segments_input.clear()
+            self._segments_output.clear()
         return result
 
 
