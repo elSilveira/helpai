@@ -5,12 +5,26 @@ Captures the primary monitor (or a specific region) and returns the
 image as encoded bytes suitable for vision-model analysis.
 """
 
+import ctypes
 import io
 import logging
+import sys
 
 import mss
 import mss.tools
 from PIL import Image
+
+# ── DPI awareness ───────────────────────────────────────────────────────────
+# Ensure screenshots capture at physical (native) resolution, not logical
+# (DPI-scaled) resolution.  Must be set before any mss/GDI call.
+if sys.platform == "win32":
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)   # Per-Monitor DPI Aware v2
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()     # Fallback for older Windows
+        except Exception:
+            pass
 
 logger = logging.getLogger(__name__)
 

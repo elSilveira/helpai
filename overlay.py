@@ -35,15 +35,20 @@ logger = logging.getLogger(__name__)
 _SURFACE0 = "#313244"
 _SURFACE1 = "#45475a"
 _SURFACE2 = "#585b70"
+_OVERLAY0 = "#6c7086"
 _SUBTEXT = "#a6adc8"
 _TEXT = OVERLAY_FG_COLOR        # #cdd6f4
 _BASE = OVERLAY_BG_COLOR        # #1e1e2e
 _MANTLE = "#181825"
+_CRUST  = "#11111b"
 _ACCENT = OVERLAY_ACCENT_COLOR  # #89b4fa
 _GREEN = "#a6e3a1"
 _RED = "#f38ba8"
 _PEACH = "#fab387"
 _PINK = "#f5c2e7"
+_MAUVE = "#cba6f7"
+_TEAL = "#94e2d5"
+_YELLOW = "#f9e2af"
 
 _BTN_STYLE = dict(
     bg=_SURFACE0,
@@ -100,12 +105,13 @@ def _add_tooltip(widget: tk.Widget, text: str) -> None:
         tw.overrideredirect(True)
         tw.attributes("-topmost", True)
         x = widget.winfo_rootx() + widget.winfo_width() // 2 - 40
-        y = widget.winfo_rooty() - 28
+        y = widget.winfo_rooty() - 30
         tw.geometry(f"+{x}+{y}")
+        tw.configure(bg=_SURFACE1)
         tk.Label(
-            tw, text=text, bg=_SURFACE0, fg=_TEXT,
-            font=(OVERLAY_FONT_FAMILY, 8), padx=6, pady=2,
-        ).pack()
+            tw, text=text, bg=_SURFACE0, fg=_SUBTEXT,
+            font=(OVERLAY_FONT_FAMILY, 7), padx=8, pady=3,
+        ).pack(padx=1, pady=1)
         tip["win"] = tw
 
     def _leave(e):
@@ -131,46 +137,56 @@ class LoadingSplash:
         self.root = tk.Tk()
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", True)
-        self.root.configure(bg=_MANTLE)
+        self.root.configure(bg=_CRUST, highlightbackground=_SURFACE1,
+                            highlightthickness=1)
 
-        w, h = 400, 150
+        w, h = 380, 160
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
         self.root.geometry(f"{w}x{h}+{(sw - w) // 2}+{(sh - h) // 2}")
 
-        # Thin accent top border
+        # Top accent line
         tk.Frame(self.root, bg=_ACCENT, height=2).pack(fill=tk.X, side=tk.TOP)
 
-        inner = tk.Frame(self.root, bg=_MANTLE)
-        inner.pack(fill=tk.BOTH, expand=True, padx=24, pady=16)
+        inner = tk.Frame(self.root, bg=_CRUST)
+        inner.pack(fill=tk.BOTH, expand=True, padx=28, pady=18)
 
+        # App name + version row
+        hdr = tk.Frame(inner, bg=_CRUST)
+        hdr.pack(fill=tk.X)
         tk.Label(
-            inner,
-            text=f"{APP_NAME}  {APP_VERSION}",
-            bg=_MANTLE,
+            hdr,
+            text=APP_NAME,
+            bg=_CRUST,
             fg=_TEXT,
-            font=(OVERLAY_FONT_FAMILY, 13, "bold"),
-        ).pack(anchor="w")
+            font=(OVERLAY_FONT_FAMILY, 14, "bold"),
+        ).pack(side=tk.LEFT)
+        tk.Label(
+            hdr,
+            text=f"  v{APP_VERSION}",
+            bg=_CRUST,
+            fg=_OVERLAY0,
+            font=(OVERLAY_FONT_FAMILY, 9),
+        ).pack(side=tk.LEFT, pady=(3, 0))
 
+        # Status line
         self._status_var = tk.StringVar(value="Starting\u2026")
         tk.Label(
             inner,
             textvariable=self._status_var,
-            bg=_MANTLE,
+            bg=_CRUST,
             fg=_SUBTEXT,
             font=(OVERLAY_FONT_FAMILY, 9),
-            wraplength=350,
+            wraplength=320,
             justify=tk.LEFT,
-        ).pack(anchor="w", pady=(6, 0))
+        ).pack(anchor="w", pady=(10, 0))
 
-        self._dot_var = tk.StringVar(value=self._DOT_FRAMES[0])
-        tk.Label(
-            inner,
-            textvariable=self._dot_var,
-            bg=_MANTLE,
-            fg=_ACCENT,
-            font=(OVERLAY_FONT_FAMILY, 9),
-        ).pack(anchor="w", pady=(8, 0))
+        # Progress bar
+        bar_frame = tk.Frame(inner, bg=_SURFACE0, height=4)
+        bar_frame.pack(fill=tk.X, pady=(12, 0))
+        bar_frame.pack_propagate(False)
+        self._progress_bar = tk.Frame(bar_frame, bg=_ACCENT, width=0)
+        self._progress_bar.pack(side=tk.LEFT, fill=tk.Y)
 
         self._dot_frame = 0
         self._after_id: str | None = None
@@ -178,9 +194,18 @@ class LoadingSplash:
         _apply_exclusion(self.root)
 
     def _animate(self) -> None:
-        self._dot_frame = (self._dot_frame + 1) % len(self._DOT_FRAMES)
-        self._dot_var.set(self._DOT_FRAMES[self._dot_frame])
-        self._after_id = self.root.after(200, self._animate)
+        self._dot_frame = (self._dot_frame + 1) % 60
+        # Animate the progress bar back and forth
+        try:
+            bar_w = self._progress_bar.master.winfo_width()
+            if bar_w > 1:
+                pos = abs((self._dot_frame % 40) - 20) / 20.0
+                w = max(20, int(bar_w * 0.3))
+                x = int((bar_w - w) * pos)
+                self._progress_bar.place(x=x, y=0, width=w, relheight=1.0)
+        except Exception:
+            pass
+        self._after_id = self.root.after(50, self._animate)
 
     def set_status(self, text: str) -> None:
         """Thread-safe status line update."""
@@ -222,10 +247,11 @@ class OverlayApp:
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", True)
         self.root.attributes("-alpha", INSIGHT_OVERLAY_OPACITY)
-        self.root.configure(bg=_MANTLE)
+        self.root.configure(bg=_CRUST, highlightbackground=_SURFACE1,
+                            highlightthickness=1)
 
-        bar_w = 560
-        bar_h = 36
+        bar_w = 520
+        bar_h = 40
         screen_w = self.root.winfo_screenwidth()
         screen_h = self.root.winfo_screenheight()
         bx = (screen_w - bar_w) // 2
@@ -293,90 +319,110 @@ class OverlayApp:
     def _build_bar(self) -> None:
         f = self.root
 
-        # Left: drag handle with app name
+        # Left: drag handle — subtle branded grip
         self._bar_drag = tk.Label(
-            f, text=f"  ≡  {APP_NAME}  ",
-            bg=_ACCENT, fg=_MANTLE,
-            font=(OVERLAY_FONT_FAMILY, 9, "bold"),
+            f, text="  ⬡  ",
+            bg=_CRUST, fg=_ACCENT,
+            font=(OVERLAY_FONT_FAMILY, 11),
             cursor="fleur",
         )
-        self._bar_drag.pack(side=tk.LEFT, fill=tk.Y)
+        self._bar_drag.pack(side=tk.LEFT, fill=tk.Y, padx=(2, 0))
 
-        # Thin separator
-        tk.Frame(f, bg=_SURFACE1, width=1).pack(side=tk.LEFT, fill=tk.Y, padx=0)
-
-        # Status
+        # Status — clean, muted
         self._status_label = tk.Label(
             f, text=" Ready ",
-            bg=_MANTLE, fg=_SUBTEXT,
+            bg=_CRUST, fg=_OVERLAY0,
             font=(OVERLAY_FONT_FAMILY, 8),
+            anchor="w",
         )
-        self._status_label.pack(side=tk.LEFT, padx=(6, 2))
+        self._status_label.pack(side=tk.LEFT, padx=(4, 2), fill=tk.Y)
 
         # ── Right-side buttons ─────────────────────────────────────────
 
-        # Quit (far right)
-        quit_btn = tk.Button(
-            f, text="✕", command=self._do_quit,
-            bg=_RED, fg=_MANTLE, activebackground="#eba0ac",
-            activeforeground=_MANTLE,
-            font=(OVERLAY_FONT_FAMILY, 10, "bold"),
-            relief=tk.FLAT, cursor="hand2", padx=6, pady=0, bd=0,
+        # Quit — subtle X, red on hover
+        quit_btn = tk.Label(
+            f, text=" ✕ ",
+            bg=_CRUST, fg=_SURFACE2,
+            font=(OVERLAY_FONT_FAMILY, 10), cursor="hand2",
         )
-        quit_btn.pack(side=tk.RIGHT, padx=(1, 3))
+        quit_btn.pack(side=tk.RIGHT, padx=(0, 4))
+        quit_btn.bind("<Button-1>", lambda _: self._do_quit())
+        quit_btn.bind("<Enter>", lambda e: quit_btn.config(fg=_RED))
+        quit_btn.bind("<Leave>", lambda e: quit_btn.config(fg=_SURFACE2))
         _add_tooltip(quit_btn, "Quit")
 
-        # Settings
-        settings_btn = tk.Button(
-            f, text="⚙", command=self._do_settings,
-            **{**_BTN_STYLE, "padx": 6, "font": (OVERLAY_FONT_FAMILY, 10)},
+        # Settings — gear
+        settings_btn = tk.Label(
+            f, text=" ⚙ ",
+            bg=_CRUST, fg=_SUBTEXT,
+            font=(OVERLAY_FONT_FAMILY, 10), cursor="hand2",
         )
         settings_btn.pack(side=tk.RIGHT, padx=1)
+        settings_btn.bind("<Button-1>", lambda _: self._do_settings())
+        settings_btn.bind("<Enter>", lambda e: settings_btn.config(fg=_TEXT))
+        settings_btn.bind("<Leave>", lambda e: settings_btn.config(fg=_SUBTEXT))
         _add_tooltip(settings_btn, "Settings")
 
-        # Separator
-        tk.Frame(f, bg=_SURFACE2, width=1).pack(side=tk.RIGHT, fill=tk.Y, pady=6, padx=2)
+        # Thin separator
+        tk.Frame(f, bg=_SURFACE1, width=1).pack(side=tk.RIGHT, fill=tk.Y, pady=8, padx=3)
 
-        # Quick Input
-        input_btn = tk.Button(f, text="⌨", command=self.open_quick_input,
-                              **{**_BTN_STYLE, "padx": 6, "font": (OVERLAY_FONT_FAMILY, 10)})
+        # Quick Input — keyboard icon
+        input_btn = self._bar_icon_btn(f, "⌨", _SUBTEXT, "Quick Input (Ctrl+Shift+Enter)")
         input_btn.pack(side=tk.RIGHT, padx=1)
-        _add_tooltip(input_btn, "Quick Input (Ctrl+Shift+Enter)")
+        input_btn.bind("<Button-1>", lambda _: self.open_quick_input())
 
-        # Screenshot
-        screen_btn = tk.Button(f, text="📸", command=lambda: self.on_screenshot(),
-                               **{**_BTN_STYLE, "padx": 6})
+        # Screenshot — camera icon
+        screen_btn = self._bar_icon_btn(f, "📷", _SUBTEXT, "Screenshot Analysis (Ctrl+E)")
         screen_btn.pack(side=tk.RIGHT, padx=1)
-        _add_tooltip(screen_btn, "Screenshot Analysis (Ctrl+E)")
+        screen_btn.bind("<Button-1>", lambda _: self.on_screenshot())
 
-        # Audio analysis
-        audio_btn = tk.Button(f, text="🎙", command=lambda: self.on_audio(),
-                              **{**_BTN_STYLE, "padx": 6})
+        # Audio — mic icon
+        audio_btn = self._bar_icon_btn(f, "🎙", _SUBTEXT, "Audio Analysis (Ctrl+D)")
         audio_btn.pack(side=tk.RIGHT, padx=1)
-        _add_tooltip(audio_btn, "Audio Analysis (Ctrl+D)")
+        audio_btn.bind("<Button-1>", lambda _: self.on_audio())
 
-        # Separator
-        tk.Frame(f, bg=_SURFACE2, width=1).pack(side=tk.RIGHT, fill=tk.Y, pady=6, padx=2)
+        # Thin separator
+        tk.Frame(f, bg=_SURFACE1, width=1).pack(side=tk.RIGHT, fill=tk.Y, pady=8, padx=3)
 
-        # Toggle insight panel
-        self._insight_btn = tk.Button(
-            f, text="📋 Insight", command=self.toggle_insight,
-            bg=_ACCENT, fg=_MANTLE, activebackground="#b4befe",
-            activeforeground=_MANTLE,
-            font=(OVERLAY_FONT_FAMILY, 9, "bold"),
-            relief=tk.FLAT, cursor="hand2", padx=6, pady=2, bd=0,
+        # Toggle insight panel — icon only, bg highlight when active
+        self._insight_btn = tk.Label(
+            f, text=" 📋 ",
+            bg=_CRUST, fg=_SUBTEXT,
+            font=(OVERLAY_FONT_FAMILY, 10), cursor="hand2",
         )
         self._insight_btn.pack(side=tk.RIGHT, padx=1)
+        self._insight_btn.bind("<Button-1>", lambda _: self.toggle_insight())
+        self._insight_btn.bind("<Enter>", lambda e: self._insight_btn.config(
+            bg=_SURFACE0 if not self._insight_visible else _ACCENT))
+        self._insight_btn.bind("<Leave>", lambda e: self._insight_btn.config(
+            bg=_SURFACE0 if self._insight_visible else _CRUST))
+        _add_tooltip(self._insight_btn, "Insight")
 
-        # Toggle conversation panel
-        self._conv_btn = tk.Button(
-            f, text="💬 Chat", command=self.toggle_conversation,
-            bg=_GREEN, fg=_MANTLE, activebackground="#b5e8b0",
-            activeforeground=_MANTLE,
-            font=(OVERLAY_FONT_FAMILY, 9, "bold"),
-            relief=tk.FLAT, cursor="hand2", padx=6, pady=2, bd=0,
+        # Toggle conversation panel — icon only, bg highlight when active
+        self._conv_btn = tk.Label(
+            f, text=" 💬 ",
+            bg=_CRUST, fg=_SUBTEXT,
+            font=(OVERLAY_FONT_FAMILY, 10), cursor="hand2",
         )
         self._conv_btn.pack(side=tk.RIGHT, padx=1)
+        self._conv_btn.bind("<Button-1>", lambda _: self.toggle_conversation())
+        self._conv_btn.bind("<Enter>", lambda e: self._conv_btn.config(
+            bg=_SURFACE0 if not self._conv_visible else _GREEN))
+        self._conv_btn.bind("<Leave>", lambda e: self._conv_btn.config(
+            bg=_SURFACE0 if self._conv_visible else _CRUST))
+        _add_tooltip(self._conv_btn, "Chat")
+
+    def _bar_icon_btn(self, parent, icon: str, fg_color: str, tooltip: str) -> tk.Label:
+        """Create a minimal icon button for the control bar."""
+        btn = tk.Label(
+            parent, text=f" {icon} ",
+            bg=_CRUST, fg=fg_color,
+            font=(OVERLAY_FONT_FAMILY, 10), cursor="hand2",
+        )
+        btn.bind("<Enter>", lambda e, b=btn: b.config(fg=_TEXT, bg=_SURFACE0))
+        btn.bind("<Leave>", lambda e, b=btn: b.config(fg=fg_color, bg=_CRUST))
+        _add_tooltip(btn, tooltip)
+        return btn
 
     # ═══════════════════════════════════════════════════════════════════
     #  Panel Factory
@@ -390,7 +436,8 @@ class OverlayApp:
         panel.overrideredirect(True)
         panel.attributes("-topmost", True)
         panel.attributes("-alpha", INSIGHT_OVERLAY_OPACITY)
-        panel.configure(bg=_BASE)
+        panel.configure(bg=_CRUST, highlightbackground=_SURFACE1,
+                        highlightthickness=1)
 
         self.root.update_idletasks()
         pw = OVERLAY_WIDTH
@@ -399,35 +446,39 @@ class OverlayApp:
         panel.withdraw()
 
         # ── Title bar ──────────────────────────────────────────────────
-        title_frame = tk.Frame(panel, bg=accent, height=28)
+        title_frame = tk.Frame(panel, bg=_CRUST, height=30)
         title_frame.pack(fill=tk.X)
         title_frame.pack_propagate(False)
 
-        # Coloured left pip
-        tk.Frame(title_frame, bg=accent, width=4).pack(side=tk.LEFT, fill=tk.Y)
+        # Accent pip on the left
+        tk.Frame(title_frame, bg=accent, width=3).pack(side=tk.LEFT, fill=tk.Y)
 
         title_label = tk.Label(
             title_frame, text=f"  {title}",
-            bg=accent, fg=_MANTLE,
+            bg=_CRUST, fg=_TEXT,
             font=(OVERLAY_FONT_FAMILY, 9, "bold"), anchor="w",
         )
         title_label.pack(side=tk.LEFT, padx=2, pady=0)
 
         close_btn_w = tk.Label(
             title_frame, text=" ✕ ",
-            bg=accent, fg=_MANTLE,
-            font=(OVERLAY_FONT_FAMILY, 9, "bold"), cursor="hand2",
+            bg=_CRUST, fg=_SURFACE2,
+            font=(OVERLAY_FONT_FAMILY, 9), cursor="hand2",
         )
-        close_btn_w.pack(side=tk.RIGHT, padx=(0, 2))
+        close_btn_w.pack(side=tk.RIGHT, padx=(0, 4))
+        close_btn_w.bind("<Enter>", lambda e: close_btn_w.config(fg=_RED))
+        close_btn_w.bind("<Leave>", lambda e: close_btn_w.config(fg=_SURFACE2))
 
         clear_w = None
         if clear_btn:
             clear_w = tk.Label(
                 title_frame, text=" 🗑 ",
-                bg=accent, fg=_MANTLE,
+                bg=_CRUST, fg=_SURFACE2,
                 font=(OVERLAY_FONT_FAMILY, 9), cursor="hand2",
             )
             clear_w.pack(side=tk.RIGHT, padx=(0, 2))
+            clear_w.bind("<Enter>", lambda e: clear_w.config(fg=_PEACH))
+            clear_w.bind("<Leave>", lambda e: clear_w.config(fg=_SURFACE2))
             _add_tooltip(clear_w, "Clear transcript")
 
         _make_draggable(panel, title_frame, title_label)
@@ -436,9 +487,9 @@ class OverlayApp:
         tk.Frame(panel, bg=_SURFACE1, height=1).pack(fill=tk.X)
 
         # ── Bottom grip ────────────────────────────────────────────────
-        grip = tk.Frame(panel, bg=_SURFACE1, cursor="sb_v_double_arrow", height=5)
+        grip = tk.Frame(panel, bg=_CRUST, cursor="sb_v_double_arrow", height=6)
         grip.pack(fill=tk.X, side=tk.BOTTOM)
-        grip_label = tk.Label(grip, text="⋯", bg=_SURFACE1, fg=_SURFACE2,
+        grip_label = tk.Label(grip, text="⋯", bg=_CRUST, fg=_SURFACE1,
                               font=(OVERLAY_FONT_FAMILY, 6), cursor="size_nw_se")
         grip_label.pack(side=tk.RIGHT, padx=4)
 
@@ -451,7 +502,7 @@ class OverlayApp:
             selectbackground=_SURFACE2,
             selectforeground="#f5e0dc",
             font=(OVERLAY_FONT_FAMILY, OVERLAY_FONT_SIZE),
-            padx=OVERLAY_PADDING,
+            padx=OVERLAY_PADDING + 4,
             pady=OVERLAY_PADDING,
             insertbackground=_TEXT,
             relief=tk.FLAT,
@@ -459,8 +510,24 @@ class OverlayApp:
             cursor="xterm",
             borderwidth=0,
             highlightthickness=0,
+            spacing1=2,   # extra space above each line
+            spacing3=2,   # extra space below each line
         )
         text_w.pack(fill=tk.BOTH, expand=True)
+
+        # Style the scrollbar to match the theme
+        try:
+            text_w.vbar.configure(
+                bg=_SURFACE0,
+                troughcolor=_MANTLE,
+                activebackground=_SURFACE1,
+                relief=tk.FLAT,
+                borderwidth=0,
+                width=8,
+                elementborderwidth=0,
+            )
+        except Exception:
+            pass
         text_w.bind("<ButtonPress-1>", lambda e: self._sel_start_on(text_w, e))
         text_w.bind("<B1-Motion>", lambda e: self._sel_move_on(text_w, e))
         text_w.bind("<ButtonRelease-1>", lambda e: self._sel_end_on(text_w))
@@ -488,8 +555,9 @@ class OverlayApp:
         if clear_w:
             clear_w.bind("<Button-1>", lambda _: self.clear_conversation())
 
-        self._conv_meter_frame = tk.Frame(panel, bg=_BASE)
-        self._conv_meter_frame.pack(fill=tk.X, padx=OVERLAY_PADDING, before=text_w)
+        self._conv_meter_frame = tk.Frame(panel, bg=_MANTLE)
+        self._conv_meter_frame.pack(fill=tk.X, padx=0, before=text_w)
+        tk.Frame(self._conv_meter_frame, bg=_SURFACE1, height=1).pack(fill=tk.X, side=tk.BOTTOM)
         self._audio_level_rows = {
             "output": self._build_audio_meter_row(self._conv_meter_frame, "🔊 THEM"),
             "input": self._build_audio_meter_row(self._conv_meter_frame, "🎙 YOU"),
@@ -506,14 +574,14 @@ class OverlayApp:
         if self._conv_visible:
             self._conv_panel.withdraw()
             self._conv_visible = False
-            self._conv_btn.config(text="💬 Chat")
+            self._conv_btn.config(bg=_CRUST, fg=_SUBTEXT)
         else:
             self._conv_panel.deiconify()
             self._conv_panel.lift()
             self._conv_panel.attributes("-topmost", True)
             self._conv_panel.after(50, lambda: _apply_exclusion(self._conv_panel))
             self._conv_visible = True
-            self._conv_btn.config(text="💬 Hide")
+            self._conv_btn.config(bg=_SURFACE0, fg=_GREEN)
             # Flush buffered conversation text
             if self._pending_conv is not None:
                 self._write_conv(self._pending_conv)
@@ -556,15 +624,15 @@ class OverlayApp:
 
     def _build_audio_meter_row(self, parent: tk.Frame, title: str) -> dict[str, object]:
         """Create one conversation-panel audio meter row."""
-        row = tk.Frame(parent, bg=_BASE)
+        row = tk.Frame(parent, bg=_MANTLE)
 
-        header = tk.Frame(row, bg=_BASE)
-        header.pack(fill=tk.X)
+        header = tk.Frame(row, bg=_MANTLE)
+        header.pack(fill=tk.X, padx=10)
 
         title_label = tk.Label(
             header,
             text=title,
-            bg=_BASE,
+            bg=_MANTLE,
             fg=_TEXT,
             font=(OVERLAY_FONT_FAMILY, 8, "bold"),
             anchor="w",
@@ -574,7 +642,7 @@ class OverlayApp:
         device_label = tk.Label(
             header,
             text="",
-            bg=_BASE,
+            bg=_MANTLE,
             fg=_SUBTEXT,
             font=(OVERLAY_FONT_FAMILY, 7),
             anchor="e",
@@ -583,15 +651,14 @@ class OverlayApp:
 
         meter = tk.Canvas(
             row,
-            height=12,
+            height=6,
             bg=_SURFACE0,
             bd=0,
-            highlightthickness=1,
-            highlightbackground=_SURFACE1,
+            highlightthickness=0,
             relief=tk.FLAT,
         )
-        fill_id = meter.create_rectangle(0, 0, 0, 12, fill=_ACCENT, width=0)
-        meter.pack(fill=tk.X, pady=(2, 0))
+        fill_id = meter.create_rectangle(0, 0, 0, 6, fill=_ACCENT, width=0)
+        meter.pack(fill=tk.X, pady=(2, 0), padx=10)
 
         return {
             "frame": row,
@@ -671,7 +738,7 @@ class OverlayApp:
                 width = max(1, meter.winfo_reqwidth())
             fill_width = int(width * level)
             if row["fill_width"] != fill_width:
-                meter.coords(row["fill"], 0, 0, fill_width, 12)
+                meter.coords(row["fill"], 0, 0, fill_width, 6)
                 row["fill_width"] = fill_width
 
             fill_color = self._meter_color(level, active)
@@ -788,14 +855,14 @@ class OverlayApp:
         if self._insight_visible:
             self._insight_panel.withdraw()
             self._insight_visible = False
-            self._insight_btn.config(text="📋 Insight")
+            self._insight_btn.config(bg=_CRUST, fg=_SUBTEXT)
         else:
             self._insight_panel.deiconify()
             self._insight_panel.lift()
             self._insight_panel.attributes("-topmost", True)
             self._insight_panel.after(50, lambda: _apply_exclusion(self._insight_panel))
             self._insight_visible = True
-            self._insight_btn.config(text="📋 Hide")
+            self._insight_btn.config(bg=_SURFACE0, fg=_ACCENT)
         self.root.lift()
 
     # ═══════════════════════════════════════════════════════════════════
@@ -1014,55 +1081,86 @@ class OverlayApp:
         win.overrideredirect(True)
         win.attributes("-topmost", True)
         win.attributes("-alpha", INSIGHT_OVERLAY_OPACITY)
-        win.configure(bg=_BASE)
+        win.configure(bg=_CRUST, highlightbackground=_SURFACE1,
+                      highlightthickness=1)
 
-        w, h = 460, 110
-        sx = self.root.winfo_x()
-        sy = self.root.winfo_y() - h - 6
+        w, h = 520, 160
+        sx = self.root.winfo_x() + (self.root.winfo_width() - w) // 2
+        sy = self.root.winfo_y() - h - 8
         win.geometry(f"{w}x{h}+{sx}+{sy}")
         _apply_exclusion(win)
 
-        # Title bar
-        tf = tk.Frame(win, bg=_ACCENT, height=24)
+        # ── Title bar ─────────────────────────────────────────────────
+        tf = tk.Frame(win, bg=_CRUST, height=26)
         tf.pack(fill=tk.X)
         tf.pack_propagate(False)
-        tl = tk.Label(tf, text="  ⌨  Ask anything…",
-                      bg=_ACCENT, fg=_MANTLE,
+
+        # Accent pip
+        tk.Frame(tf, bg=_ACCENT, width=3).pack(side=tk.LEFT, fill=tk.Y)
+
+        tl = tk.Label(tf, text="  Ask anything",
+                      bg=_CRUST, fg=_TEXT,
                       font=(OVERLAY_FONT_FAMILY, 8, "bold"), anchor="w")
         tl.pack(side=tk.LEFT, padx=2)
-        cb = tk.Label(tf, text=" ✕ ", bg=_ACCENT, fg=_MANTLE,
-                      font=(OVERLAY_FONT_FAMILY, 9, "bold"), cursor="hand2")
-        cb.pack(side=tk.RIGHT)
+
+        cb = tk.Label(tf, text=" ✕ ", bg=_CRUST, fg=_SURFACE2,
+                      font=(OVERLAY_FONT_FAMILY, 9), cursor="hand2")
+        cb.pack(side=tk.RIGHT, padx=(0, 4))
         cb.bind("<Button-1>", lambda _: self._close_quick_input(win))
+        cb.bind("<Enter>", lambda e: cb.config(fg=_RED))
+        cb.bind("<Leave>", lambda e: cb.config(fg=_SURFACE2))
         _make_draggable(win, tf, tl)
 
         tk.Frame(win, bg=_SURFACE1, height=1).pack(fill=tk.X)
 
-        tk.Label(
-            win, text="Type your question, then press Enter:",
-            bg=_BASE, fg=_SUBTEXT,
-            font=(OVERLAY_FONT_FAMILY, 8),
-        ).pack(padx=10, pady=(6, 2), anchor="w")
+        # ── Input area (multiline Text) ───────────────────────────────
+        body = tk.Frame(win, bg=_BASE)
+        body.pack(fill=tk.BOTH, expand=True)
 
-        entry = tk.Entry(
-            win, bg=_SURFACE0, fg=_TEXT,
-            insertbackground=_TEXT,
+        text_input = tk.Text(
+            body, bg=_BASE, fg=_TEXT,
+            insertbackground=_ACCENT,
             font=(OVERLAY_FONT_FAMILY, OVERLAY_FONT_SIZE),
             relief=tk.FLAT,
-            highlightthickness=1, highlightcolor=_ACCENT,
-            highlightbackground=_SURFACE1,
+            highlightthickness=0,
+            borderwidth=0,
+            wrap=tk.WORD,
+            undo=True,
+            spacing1=1, spacing3=1,
         )
-        entry.pack(fill=tk.X, padx=10, pady=(2, 8), ipady=3)
-        entry.focus_force()
+        text_input.pack(fill=tk.BOTH, expand=True, padx=14, pady=(10, 4))
+        text_input.focus_force()
+
+        # ── Footer row (hint + send button) ───────────────────────────
+        footer = tk.Frame(win, bg=_CRUST)
+        footer.pack(fill=tk.X)
+        tk.Frame(footer, bg=_SURFACE1, height=1).pack(fill=tk.X)
+
+        hint = tk.Label(footer, text="  Ctrl+Enter to send",
+                        bg=_CRUST, fg=_OVERLAY0,
+                        font=(OVERLAY_FONT_FAMILY, 7))
+        hint.pack(side=tk.LEFT, padx=6, pady=4)
+
+        send_btn = tk.Label(
+            footer, text=" Send ➜ ",
+            bg=_ACCENT, fg=_CRUST,
+            font=(OVERLAY_FONT_FAMILY, 8, "bold"),
+            cursor="hand2", padx=8, pady=2,
+        )
+        send_btn.pack(side=tk.RIGHT, padx=6, pady=4)
+        send_btn.bind("<Enter>", lambda e: send_btn.config(bg=_MAUVE))
+        send_btn.bind("<Leave>", lambda e: send_btn.config(bg=_ACCENT))
 
         def submit(_e=None):
-            text = entry.get().strip()
+            text = text_input.get("1.0", tk.END).strip()
             if text:
                 self.on_quick_input_submit(text)
             self._close_quick_input(win)
+            return "break"
 
-        entry.bind("<Return>", submit)
-        entry.bind("<Escape>", lambda _: self._close_quick_input(win))
+        send_btn.bind("<Button-1>", lambda _: submit())
+        text_input.bind("<Control-Return>", submit)
+        text_input.bind("<Escape>", lambda _: self._close_quick_input(win))
         self._quick_input_win = win
 
     def _close_quick_input(self, win):
@@ -1192,6 +1290,13 @@ class OverlayApp:
         self._insight_panel.geometry(f"{cur_w}x{new_h}+{cur_x}+{cur_y}")
         self._insight_size_locked = True
 
+    def _panel_alive(self, panel) -> bool:
+        """Return True if *panel* is a valid, non-destroyed Toplevel."""
+        try:
+            return panel is not None and panel.winfo_exists()
+        except Exception:
+            return False
+
     def show(self) -> None:
         if self._saved_bar_geo:
             self.root.geometry(self._saved_bar_geo)
@@ -1201,7 +1306,7 @@ class OverlayApp:
             (self._insight_panel, self._insight_visible, self._saved_insight_geo),
             (self._settings_panel, self._settings_visible, self._saved_settings_geo),
         ]:
-            if panel and visible:
+            if self._panel_alive(panel) and visible:
                 if saved_geo:
                     panel.geometry(saved_geo)
                 panel.deiconify()
@@ -1220,25 +1325,25 @@ class OverlayApp:
             self._saved_bar_geo = self.root.geometry()
         except Exception:
             pass
-        if self._conv_panel and self._conv_visible:
+        if self._panel_alive(self._conv_panel) and self._conv_visible:
             try:
                 self._saved_conv_geo = self._conv_panel.geometry()
             except Exception:
                 pass
             self._conv_panel.withdraw()
-        if self._insight_panel and self._insight_visible:
+        if self._panel_alive(self._insight_panel) and self._insight_visible:
             try:
                 self._saved_insight_geo = self._insight_panel.geometry()
             except Exception:
                 pass
             self._insight_panel.withdraw()
-        if self._settings_panel and self._settings_visible:
+        if self._panel_alive(self._settings_panel) and self._settings_visible:
             try:
                 self._saved_settings_geo = self._settings_panel.geometry()
             except Exception:
                 pass
             self._settings_panel.withdraw()
-        if self._quick_input_win and self._quick_input_win.winfo_exists():
+        if self._panel_alive(self._quick_input_win):
             try:
                 self._saved_quick_input_geo = self._quick_input_win.geometry()
             except Exception:
