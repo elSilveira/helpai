@@ -6,6 +6,7 @@ dist/
 build/
 build_temp/
 *.spec
+*.egg-info/
 
 settings.json
 .env
