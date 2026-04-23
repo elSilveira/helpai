@@ -99,6 +99,7 @@ LOCAL_WHISPER_DEVICE, LOCAL_WHISPER_COMPUTE = _resolve_whisper_device(LOCAL_WHIS
 
 # ─── Screenshot / Visual Feedback ──────────────────────────────────────────
 SCREENSHOT_FEEDBACK_ENABLED = _user.get("SCREENSHOT_FEEDBACK_ENABLED", True)
+STEALTH_MODE = _user.get("STEALTH_MODE", True)
 
 # ─── Overlay UI ─────────────────────────────────────────────────────────────
 INSIGHT_OVERLAY_OPACITY = _user.get("INSIGHT_OVERLAY_OPACITY", 0.88)

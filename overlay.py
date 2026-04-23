@@ -26,8 +26,9 @@ from config import (
     OVERLAY_HEIGHT,
     OVERLAY_PADDING,
     OVERLAY_WIDTH,
+    STEALTH_MODE,
 )
-from visibility import exclude_from_capture
+from visibility import exclude_from_capture, include_in_capture
 
 logger = logging.getLogger(__name__)
 
@@ -84,14 +85,46 @@ def _make_draggable(window: tk.Tk | tk.Toplevel, *handles: tk.Widget) -> None:
         w.bind("<B1-Motion>", on_drag)
 
 
+# ── Stealth state (module-level, toggled at runtime) ───────────────────────
+_stealth_enabled: bool = STEALTH_MODE
+_tracked_windows: list = []  # all tk windows that should be stealth-managed
+
+
 def _apply_exclusion(window: tk.Tk | tk.Toplevel) -> None:
-    """Exclude a tkinter window from screen capture."""
+    """Conditionally exclude a tkinter window from screen capture.
+
+    When stealth is on, applies WDA_EXCLUDEFROMCAPTURE.
+    Always tracks the window so stealth can be toggled later.
+    """
+    if window not in _tracked_windows:
+        _tracked_windows.append(window)
+    if not _stealth_enabled:
+        return
     try:
         window.update_idletasks()
         hwnd = int(window.wm_frame(), 16)
         exclude_from_capture(hwnd)
     except Exception:
         logger.exception("Could not apply capture exclusion.")
+
+
+def _set_stealth_all(enabled: bool) -> None:
+    """Apply or remove capture exclusion on every tracked window."""
+    global _stealth_enabled
+    _stealth_enabled = enabled
+    for win in list(_tracked_windows):
+        try:
+            if not win.winfo_exists():
+                _tracked_windows.remove(win)
+                continue
+            win.update_idletasks()
+            hwnd = int(win.wm_frame(), 16)
+            if enabled:
+                exclude_from_capture(hwnd)
+            else:
+                include_in_capture(hwnd)
+        except Exception:
+            logger.debug("Stealth toggle failed for a window.", exc_info=True)
 
 
 def _add_tooltip(widget: tk.Widget, text: str) -> None:
@@ -363,6 +396,21 @@ class OverlayApp:
         settings_btn.bind("<Leave>", lambda e: settings_btn.config(fg=_SUBTEXT))
         _add_tooltip(settings_btn, "Settings")
 
+        # Stealth mode toggle — eye icon
+        self._stealth_btn = tk.Label(
+            f, text=" 👁 " if not _stealth_enabled else " 🔒 ",
+            bg=_SURFACE0 if _stealth_enabled else _CRUST,
+            fg=_GREEN if _stealth_enabled else _SUBTEXT,
+            font=(OVERLAY_FONT_FAMILY, 10), cursor="hand2",
+        )
+        self._stealth_btn.pack(side=tk.RIGHT, padx=1)
+        self._stealth_btn.bind("<Button-1>", lambda _: self.toggle_stealth())
+        self._stealth_btn.bind("<Enter>", lambda e: self._stealth_btn.config(
+            bg=_SURFACE0))
+        self._stealth_btn.bind("<Leave>", lambda e: self._stealth_btn.config(
+            bg=_SURFACE0 if _stealth_enabled else _CRUST))
+        _add_tooltip(self._stealth_btn, "Stealth Mode")
+
         # Thin separator
         tk.Frame(f, bg=_SURFACE1, width=1).pack(side=tk.RIGHT, fill=tk.Y, pady=8, padx=3)
 
@@ -384,33 +432,15 @@ class OverlayApp:
         # Thin separator
         tk.Frame(f, bg=_SURFACE1, width=1).pack(side=tk.RIGHT, fill=tk.Y, pady=8, padx=3)
 
-        # Toggle insight panel — icon only, bg highlight when active
-        self._insight_btn = tk.Label(
-            f, text=" 📋 ",
-            bg=_CRUST, fg=_SUBTEXT,
-            font=(OVERLAY_FONT_FAMILY, 10), cursor="hand2",
-        )
+        # Toggle insight panel
+        self._insight_btn = self._bar_icon_btn(f, "📋", _ACCENT, "Insight")
         self._insight_btn.pack(side=tk.RIGHT, padx=1)
         self._insight_btn.bind("<Button-1>", lambda _: self.toggle_insight())
-        self._insight_btn.bind("<Enter>", lambda e: self._insight_btn.config(
-            bg=_SURFACE0 if not self._insight_visible else _ACCENT))
-        self._insight_btn.bind("<Leave>", lambda e: self._insight_btn.config(
-            bg=_SURFACE0 if self._insight_visible else _CRUST))
-        _add_tooltip(self._insight_btn, "Insight")
 
-        # Toggle conversation panel — icon only, bg highlight when active
-        self._conv_btn = tk.Label(
-            f, text=" 💬 ",
-            bg=_CRUST, fg=_SUBTEXT,
-            font=(OVERLAY_FONT_FAMILY, 10), cursor="hand2",
-        )
+        # Toggle conversation panel
+        self._conv_btn = self._bar_icon_btn(f, "💬", _GREEN, "Chat")
         self._conv_btn.pack(side=tk.RIGHT, padx=1)
         self._conv_btn.bind("<Button-1>", lambda _: self.toggle_conversation())
-        self._conv_btn.bind("<Enter>", lambda e: self._conv_btn.config(
-            bg=_SURFACE0 if not self._conv_visible else _GREEN))
-        self._conv_btn.bind("<Leave>", lambda e: self._conv_btn.config(
-            bg=_SURFACE0 if self._conv_visible else _CRUST))
-        _add_tooltip(self._conv_btn, "Chat")
 
     def _bar_icon_btn(self, parent, icon: str, fg_color: str, tooltip: str) -> tk.Label:
         """Create a minimal icon button for the control bar."""
@@ -574,14 +604,14 @@ class OverlayApp:
         if self._conv_visible:
             self._conv_panel.withdraw()
             self._conv_visible = False
-            self._conv_btn.config(bg=_CRUST, fg=_SUBTEXT)
+            # panel closed — no button state change needed
         else:
             self._conv_panel.deiconify()
             self._conv_panel.lift()
             self._conv_panel.attributes("-topmost", True)
             self._conv_panel.after(50, lambda: _apply_exclusion(self._conv_panel))
             self._conv_visible = True
-            self._conv_btn.config(bg=_SURFACE0, fg=_GREEN)
+            # panel opened — no button state change needed
             # Flush buffered conversation text
             if self._pending_conv is not None:
                 self._write_conv(self._pending_conv)
@@ -855,14 +885,14 @@ class OverlayApp:
         if self._insight_visible:
             self._insight_panel.withdraw()
             self._insight_visible = False
-            self._insight_btn.config(bg=_CRUST, fg=_SUBTEXT)
+            # panel closed — no button state change needed
         else:
             self._insight_panel.deiconify()
             self._insight_panel.lift()
             self._insight_panel.attributes("-topmost", True)
             self._insight_panel.after(50, lambda: _apply_exclusion(self._insight_panel))
             self._insight_visible = True
-            self._insight_btn.config(bg=_SURFACE0, fg=_ACCENT)
+            # panel opened — no button state change needed
         self.root.lift()
 
     # ═══════════════════════════════════════════════════════════════════
@@ -1180,6 +1210,35 @@ class OverlayApp:
 
     def _do_settings(self) -> None:
         self.toggle_settings()
+
+    # ═══════════════════════════════════════════════════════════════════
+    #  Stealth Mode
+    # ═══════════════════════════════════════════════════════════════════
+
+    def toggle_stealth(self) -> None:
+        """Toggle stealth mode on/off and persist the setting."""
+        self.set_stealth(not _stealth_enabled)
+
+    def set_stealth(self, enabled: bool) -> None:
+        """Enable or disable stealth mode for all overlay windows."""
+        _set_stealth_all(enabled)
+        # Update toolbar button appearance
+        if enabled:
+            self._stealth_btn.config(text=" 🔒 ", fg=_GREEN, bg=_SURFACE0)
+            self.set_status("Stealth ON — hidden from capture")
+        else:
+            self._stealth_btn.config(text=" 👁 ", fg=_SUBTEXT, bg=_CRUST)
+            self.set_status("Stealth OFF — visible in capture")
+        # Persist to settings
+        import settings as _settings_mod
+        data = _settings_mod.load()
+        data["STEALTH_MODE"] = enabled
+        _settings_mod.save(data)
+        logger.info("Stealth mode %s.", "enabled" if enabled else "disabled")
+
+    @property
+    def stealth_enabled(self) -> bool:
+        return _stealth_enabled
 
     # ═══════════════════════════════════════════════════════════════════
     #  Public API

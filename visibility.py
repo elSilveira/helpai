@@ -44,6 +44,23 @@ def exclude_from_capture(hwnd: int) -> bool:
     return bool(result)
 
 
+def include_in_capture(hwnd: int) -> bool:
+    """Remove capture exclusion from *hwnd* (make it visible in screen shares).
+
+    Returns True on success, False otherwise.
+    """
+    WDA_NONE = 0x00000000
+    result = SetWindowDisplayAffinity(hwnd, WDA_NONE)
+    if result:
+        logger.info("Window 0x%X included in capture (stealth off).", hwnd)
+    else:
+        error = ctypes.get_last_error()
+        logger.warning(
+            "SetWindowDisplayAffinity(NONE) failed for 0x%X (error %d).", hwnd, error
+        )
+    return bool(result)
+
+
 def get_hwnd_from_tkinter(tk_root) -> int:
     """Retrieve the native Win32 HWND from a tkinter root/toplevel widget."""
     tk_root.update_idletasks()

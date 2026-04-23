@@ -436,6 +436,11 @@ class SettingsWindow:
         card = self._card(p, "Overlay")
         self._slider_row(card, "Opacity", "INSIGHT_OVERLAY_OPACITY", f, 0.1, 1.0)
 
+        card = self._card(p, "Stealth")
+        self._combo_row(card, "Stealth Mode", "STEALTH_MODE", f,
+                        [("Enabled — hidden from capture", True),
+                         ("Disabled — visible in shares", False)], width=30)
+
         card = self._card(p, "Features")
         self._combo_row(card, "Screenshot Analysis", "SCREENSHOT_FEEDBACK_ENABLED", f,
                         [("Enabled", True), ("Disabled", False)], width=20)
