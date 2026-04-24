@@ -523,6 +523,24 @@ def main() -> None:
                             logger.exception("Failed to pull Ollama model.")
                     else:
                         logger.info("Ollama model %s is ready.", OLLAMA_MODEL)
+
+                    # Warm up: load model into GPU memory so first request is fast
+                    splash.set_status("Loading model into GPU\u2026")
+                    try:
+                        req_data = json.dumps({
+                            "model": OLLAMA_MODEL,
+                            "keep_alive": "30m",
+                        }).encode()
+                        req = urllib.request.Request(
+                            f"{OLLAMA_BASE_URL}/api/generate",
+                            data=req_data,
+                            headers={"Content-Type": "application/json"},
+                        )
+                        resp = urllib.request.urlopen(req, timeout=120)
+                        resp.close()
+                        logger.info("Model %s loaded into memory.", OLLAMA_MODEL)
+                    except Exception:
+                        logger.debug("Model warmup request failed (non-fatal).")
             else:
                 logger.warning("Ollama provider selected but ollama not found on PATH.")
 

@@ -310,6 +310,8 @@ class OverlayApp:
         self._saved_insight_geo: str | None = None
         self._insight_text: scrolledtext.ScrolledText | None = None
         self._insight_size_locked = False  # True after first auto-expand
+        self._insight_user_scrolled = False  # True when user scrolls manually
+        self._insight_last_len = 0  # track streaming (content growing)
 
         # ── Settings Panel ─────────────────────────────────────────────
         self._settings_panel: tk.Toplevel | None = None
@@ -555,7 +557,7 @@ class OverlayApp:
                 activebackground=_SURFACE1,
                 relief=tk.FLAT,
                 borderwidth=0,
-                width=8,
+                width=12,
                 elementborderwidth=0,
             )
         except Exception:
@@ -880,7 +882,13 @@ class OverlayApp:
         self._insight_panel = panel
         self._insight_text = text_w
         self._insight_size_locked = False
+        self._insight_user_scrolled = False
+        self._insight_last_len = 0
         close_w.bind("<Button-1>", lambda _: self.toggle_insight())
+        # Detect manual scrolling
+        text_w.bind("<MouseWheel>", self._on_insight_scroll)
+        text_w.bind("<Button-4>", self._on_insight_scroll)   # Linux scroll up
+        text_w.bind("<Button-5>", self._on_insight_scroll)   # Linux scroll down
 
     def toggle_insight(self) -> None:
         self._ensure_insight_panel()
@@ -1302,6 +1310,20 @@ class OverlayApp:
         self._conv_text.config(state=tk.DISABLED)
         self._conv_text.see(tk.END)
 
+    def _is_insight_near_bottom(self) -> bool:
+        """Return True if insight text is scrolled to (or near) the bottom."""
+        try:
+            return self._insight_text.yview()[1] >= 0.95
+        except Exception:
+            return True
+
+    def _on_insight_scroll(self, *_args):
+        """Called when user scrolls the insight panel manually."""
+        if not self._is_insight_near_bottom():
+            self._insight_user_scrolled = True
+        else:
+            self._insight_user_scrolled = False
+
     def set_insight(self, text: str) -> None:
         """Replace insight panel content."""
         self._ensure_insight_panel()
@@ -1310,11 +1332,29 @@ class OverlayApp:
         self.root.deiconify()
         if self._insight_text is None:
             return
+
+        new_len = len(text)
+        is_streaming = new_len > self._insight_last_len and self._insight_last_len > 0
+        self._insight_last_len = new_len
+
+        # Save scroll position before replacing
+        was_near_bottom = self._is_insight_near_bottom()
+
         self._insight_text.config(state=tk.NORMAL)
         self._insight_text.delete("1.0", tk.END)
         self._insight_text.insert(tk.END, text)
         self._insight_text.config(state=tk.DISABLED)
-        self._insight_text.see("1.0")
+
+        if is_streaming:
+            # During streaming: follow bottom unless user scrolled up
+            if not self._insight_user_scrolled:
+                self._insight_text.see(tk.END)
+        else:
+            # New (non-streaming) content: scroll to top, reset state
+            self._insight_text.see("1.0")
+            self._insight_user_scrolled = False
+            self._insight_last_len = new_len
+
         self._auto_expand_insight()
         logger.debug("Insight panel updated (%d chars).", len(text))
 
@@ -1328,7 +1368,8 @@ class OverlayApp:
         self._insight_text.config(state=tk.NORMAL)
         self._insight_text.insert(tk.END, "\n" + text)
         self._insight_text.config(state=tk.DISABLED)
-        self._insight_text.see("1.0")
+        if not self._insight_user_scrolled:
+            self._insight_text.see(tk.END)
 
     def _auto_expand_insight(self) -> None:
         """Expand the insight panel height on first show only; never move it after."""

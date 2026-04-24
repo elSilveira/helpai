@@ -298,6 +298,10 @@ class SettingsWindow:
                          ("Phi-4 Mini 3.8B  •  ultrafast math", "phi4-mini"),
                          ("Phi-4 14B  •  math/reasoning", "phi4:14b"),
                          ("Gemma 3 12B  •  multimodal, 128K", "gemma3:12b"),
+                         ("Gemma 4 E2B  •  tiny, phone-ready, 7GB", "gemma4:e2b"),
+                         ("Gemma 4 E4B  •  small edge, multimodal", "gemma4:e4b"),
+                         ("Gemma 4 26B MoE  •  frontier, 256K", "gemma4:26b"),
+                         ("Gemma 4 31B  •  best Gemma, 256K", "gemma4:31b"),
                          ("Mistral Nemo 12B  •  fast multilingual", "mistral-nemo:12b"),
                          ("GLM-4 9B  •  beats Llama on code", "glm4:9b"),
                          ("Llama 4 Scout 17B  •  multimodal", "llama4:scout"),
@@ -451,10 +455,19 @@ class SettingsWindow:
         """Install Ollama, pull the selected model, and start the server."""
         import os, subprocess, shutil, threading, time
 
+        # Read the currently selected model from the combo (StringVar + choice map)
+        model = "qwen3:8b"
         widget = self._entries.get("OLLAMA_MODEL")
-        model = widget.get().strip() if isinstance(widget, tk.Entry) else "qwen3:14b"
+        if widget is not None:
+            display_val = widget.get() if isinstance(widget, tk.StringVar) else (
+                widget.get().strip() if isinstance(widget, tk.Entry) else ""
+            )
+            if display_val:
+                # Resolve display label → actual value via choice map
+                choice_map = self._choice_maps.get("OLLAMA_MODEL", {})
+                model = choice_map.get(display_val, display_val)
         if not model:
-            model = "qwen3:14b"
+            model = "qwen3:8b"
 
         # ── Progress dialog ────────────────────────────────────────────
         prog = tk.Toplevel(self.root)
@@ -462,16 +475,16 @@ class SettingsWindow:
         prog.attributes("-topmost", True)
         prog.configure(bg=_CRUST, highlightbackground=_SURFACE1,
                        highlightthickness=1)
-        pw, ph = 480, 320
+        pw, ph = 560, 420
         px = self.root.winfo_x() + (self.root.winfo_width() - pw) // 2
         py = self.root.winfo_y() + (self.root.winfo_height() - ph) // 2
         prog.geometry(f"{pw}x{ph}+{px}+{py}")
 
         # Header
         hdr = tk.Frame(prog, bg=_CRUST)
-        hdr.pack(fill=tk.X, padx=16, pady=(14, 0))
+        hdr.pack(fill=tk.X, padx=20, pady=(16, 0))
         tk.Label(hdr, text="⚡  Ollama Setup", bg=_CRUST, fg=_ACCENT,
-                 font=(_FONT, 12, "bold")).pack(side=tk.LEFT)
+                 font=(_FONT, 13, "bold")).pack(side=tk.LEFT)
 
         # Loading dots (animated)
         dot_var = tk.StringVar(value="●○○○○")
@@ -492,34 +505,69 @@ class SettingsWindow:
 
         _anim_id[0] = prog.after(200, _animate)
 
+        # Model badge
+        model_row = tk.Frame(prog, bg=_CRUST)
+        model_row.pack(fill=tk.X, padx=20, pady=(6, 0))
+        tk.Label(model_row, text="Model:", bg=_CRUST, fg=_OVERLAY0,
+                 font=(_FONT, 9)).pack(side=tk.LEFT)
+        tk.Label(model_row, text=f"  {model}  ", bg=_SURFACE0, fg=_GREEN,
+                 font=(_FONT, 10, "bold")).pack(side=tk.LEFT, padx=(6, 0))
+
         # Status line
         status_var = tk.StringVar(value="Checking installation…")
         tk.Label(prog, textvariable=status_var, bg=_CRUST, fg=_TEXT,
-                 font=(_FONT, 10), anchor="w").pack(fill=tk.X, padx=16, pady=(10, 4))
+                 font=(_FONT, 10), anchor="w").pack(fill=tk.X, padx=20, pady=(10, 2))
 
-        # Log area
+        # Progress bar
+        progress_var = tk.DoubleVar(value=0)
+        progress_frame = tk.Frame(prog, bg=_SURFACE0, height=6)
+        progress_frame.pack(fill=tk.X, padx=20, pady=(0, 8))
+        progress_frame.pack_propagate(False)
+        progress_bar = tk.Frame(progress_frame, bg=_ACCENT, height=6, width=0)
+        progress_bar.place(x=0, y=0, relheight=1.0, relwidth=0.0)
+
+        def _set_progress(pct: float):
+            """Set progress bar 0.0–1.0 (thread-safe)."""
+            try:
+                prog.after(0, lambda: progress_bar.place_configure(relwidth=max(0.0, min(1.0, pct))))
+            except Exception:
+                pass
+
+        # Log area with scrollbar
         log_frame = tk.Frame(prog, bg=_SURFACE0, highlightbackground=_SURFACE1,
                              highlightthickness=1)
-        log_frame.pack(fill=tk.BOTH, expand=True, padx=16, pady=(0, 8))
+        log_frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 8))
+
+        log_scroll = tk.Scrollbar(log_frame, orient=tk.VERTICAL,
+                                  bg=_SURFACE0, troughcolor=_MANTLE,
+                                  activebackground=_SURFACE1, width=10,
+                                  relief=tk.FLAT, borderwidth=0)
+        log_scroll.pack(side=tk.RIGHT, fill=tk.Y)
 
         log_text = tk.Text(
             log_frame, bg=_SURFACE0, fg=_SUBTEXT,
-            font=(_FONT, 8), wrap=tk.WORD,
-            relief=tk.FLAT, bd=0, padx=8, pady=6,
+            font=(_FONT, 9), wrap=tk.WORD,
+            relief=tk.FLAT, bd=0, padx=10, pady=8,
             insertbackground=_SUBTEXT, state=tk.DISABLED,
             highlightthickness=0,
+            yscrollcommand=log_scroll.set,
         )
         log_text.pack(fill=tk.BOTH, expand=True)
+        log_scroll.config(command=log_text.yview)
 
         # Bottom button area (initially empty)
         btn_frame = tk.Frame(prog, bg=_CRUST)
-        btn_frame.pack(fill=tk.X, padx=16, pady=(0, 12))
+        btn_frame.pack(fill=tk.X, padx=20, pady=(0, 14))
 
-        def _log(line: str):
-            """Append a line to the log area (thread-safe)."""
+        def _log(line: str, replace_last: bool = False):
+            """Append a line to the log area (thread-safe).
+            If replace_last=True, overwrite the last line instead."""
             def _do():
                 try:
                     log_text.config(state=tk.NORMAL)
+                    if replace_last:
+                        # Delete the last line and replace it
+                        log_text.delete("end-2l linestart", "end-1c")
                     log_text.insert(tk.END, line + "\n")
                     log_text.see(tk.END)
                     log_text.config(state=tk.DISABLED)
@@ -559,31 +607,59 @@ class SettingsWindow:
                 pass
 
         def _stream_cmd(cmd, label, timeout_s=3600):
-            """Run a command and stream its stdout/stderr to the log."""
+            """Run a command and stream its stdout/stderr to the log.
+            Strips ANSI escape codes and handles \\r progress updates."""
+            import re as _re
+            _ansi_re = _re.compile(r'\x1b\[[^a-zA-Z]*[a-zA-Z]|\x1b\][^\x07]*\x07|\x1b[()][0-9A-B]')
+            _pct_re = _re.compile(r'(\d+)%')
             CREATE_NO_WINDOW = 0x08000000
             _log(f"$ {' '.join(cmd)}")
+            _is_progress = [False]  # tracks if last line was a progress line
             try:
                 proc = subprocess.Popen(
                     cmd,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
-                    text=True,
                     encoding="utf-8",
                     errors="replace",
-                    bufsize=1,
                     creationflags=CREATE_NO_WINDOW,
                 )
                 deadline = time.monotonic() + timeout_s
-                for line in proc.stdout:
-                    stripped = line.rstrip()
-                    if stripped:
-                        _log(stripped)
+                buf = ""
+                while True:
+                    chunk = proc.stdout.read(512)
+                    if not chunk:
+                        break
+                    buf += chunk
+                    # Split on \r or \n (ollama uses \r for progress)
+                    parts = _re.split(r'[\r\n]+', buf)
+                    buf = parts[-1]  # keep incomplete tail
+                    for part in parts[:-1]:
+                        clean = _ansi_re.sub('', part).strip()
+                        if not clean:
+                            continue
+                        m = _pct_re.search(clean)
+                        if m:
+                            pct = int(m.group(1)) / 100.0
+                            _set_progress(pct)
+                            # Format a nice progress line for display
+                            _log(clean, replace_last=_is_progress[0])
+                            _is_progress[0] = True
+                        else:
+                            _log(clean)
+                            _is_progress[0] = False
                     if time.monotonic() > deadline:
                         proc.kill()
                         _log(f"⚠ {label} timed out")
                         return False
+                # Flush remaining buffer
+                if buf:
+                    clean = _ansi_re.sub('', buf).strip()
+                    if clean:
+                        _log(clean)
                 proc.wait(timeout=30)
                 if proc.returncode == 0:
+                    _set_progress(1.0)
                     _log(f"✓ {label} completed")
                     return True
                 else:

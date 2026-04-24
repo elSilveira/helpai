@@ -43,6 +43,11 @@ HIDDEN_IMPORTS = [
     "onnxruntime",
     "huggingface_hub",
     "av",
+    "nvidia.cublas",
+    "nvidia.cudnn",
+    "nvidia.cuda_nvrtc",
+    "pystray",
+    "pystray._win32",
 ]
 
 COLLECT_SUBMODULE_PACKAGES = [
@@ -51,6 +56,16 @@ COLLECT_SUBMODULE_PACKAGES = [
 
 COLLECT_DATA_PACKAGES = [
     "faster_whisper",
+]
+
+# Packages whose native binaries (.dll/.so) must be bundled.
+# Without this, CUDA libs like cublas64_12.dll are missing at runtime.
+COLLECT_BINARIES_PACKAGES = [
+    "ctranslate2",
+    "nvidia.cublas",
+    "nvidia.cudnn",
+    "nvidia.cuda_nvrtc",
+    "onnxruntime",
 ]
 
 REQUIRED_BUNDLE_PATHS = [
@@ -142,6 +157,12 @@ def build():
     version = APP_VERSION
     version_file = _write_version_file(version)
 
+    # Remove stale spec file to force PyInstaller to regenerate from CLI args
+    stale_spec = ROOT / "HelpAI.spec"
+    if stale_spec.exists():
+        stale_spec.unlink()
+        print("[*] Removed stale HelpAI.spec")
+
     cmd = [
         sys.executable, "-m", "PyInstaller",
         "--name", "HelpAI",
@@ -162,6 +183,9 @@ def build():
 
     for package in COLLECT_DATA_PACKAGES:
         cmd += ["--collect-data", package]
+
+    for package in COLLECT_BINARIES_PACKAGES:
+        cmd += ["--collect-binaries", package]
 
     for src, dest in DATA_FILES:
         cmd += ["--add-data", f"{src};{dest}"]
