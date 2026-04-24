@@ -14,47 +14,74 @@ import re
 from openai import OpenAI, NotFoundError, APIConnectionError
 
 from config import (
-    LLM_PROVIDER,
+    LLM_TEXT_PROVIDER,
+    LLM_IMAGE_PROVIDER,
     OPENAI_API_KEY,
-    OPENAI_MODEL,
+    OPENAI_TEXT_MODEL,
+    OPENAI_IMAGE_MODEL,
     OLLAMA_BASE_URL,
-    OLLAMA_MODEL,
+    OLLAMA_TEXT_MODEL,
+    OLLAMA_IMAGE_MODEL,
 )
 from screenshot import prepare_vision_views
 from speech_to_text import transcribe_wav_bytes
 
 logger = logging.getLogger(__name__)
 
-_client: OpenAI | None = None
-_active_provider: str | None = None
+# Separate clients for text and image providers (they may differ)
+_text_client: OpenAI | None = None
+_image_client: OpenAI | None = None
+_text_provider_cache: str | None = None
+_image_provider_cache: str | None = None
 
 
-def _get_client() -> OpenAI:
-    """Return an OpenAI-compatible client for the configured LLM provider."""
-    global _client, _active_provider
-    if _client is None or _active_provider != LLM_PROVIDER:
-        _active_provider = LLM_PROVIDER
-        if LLM_PROVIDER == "ollama":
-            _client = OpenAI(
-                base_url=f"{OLLAMA_BASE_URL}/v1",
-                api_key="ollama",
-                max_retries=0,  # fail fast — no confusing retry logs
+def _make_client(provider: str) -> OpenAI:
+    """Create an OpenAI-compatible client for the given provider."""
+    if provider == "ollama":
+        return OpenAI(
+            base_url=f"{OLLAMA_BASE_URL}/v1",
+            api_key="ollama",
+            max_retries=0,
+        )
+    else:
+        if not OPENAI_API_KEY:
+            raise RuntimeError(
+                "OPENAI_API_KEY is not set. "
+                "Set it in Settings or switch provider to Ollama."
             )
-            logger.info("Using Ollama at %s with model %s", OLLAMA_BASE_URL, OLLAMA_MODEL)
-        else:
-            if not OPENAI_API_KEY:
-                raise RuntimeError(
-                    "OPENAI_API_KEY is not set. "
-                    "Set it in Settings or switch LLM Provider to Ollama."
-                )
-            _client = OpenAI(api_key=OPENAI_API_KEY)
-            logger.info("Using OpenAI API with model %s", OPENAI_MODEL)
-    return _client
+        return OpenAI(api_key=OPENAI_API_KEY)
+
+
+def _get_text_client() -> OpenAI:
+    """Return the client for the text provider."""
+    global _text_client, _text_provider_cache
+    if _text_client is None or _text_provider_cache != LLM_TEXT_PROVIDER:
+        _text_provider_cache = LLM_TEXT_PROVIDER
+        _text_client = _make_client(LLM_TEXT_PROVIDER)
+        model = OLLAMA_TEXT_MODEL if LLM_TEXT_PROVIDER == "ollama" else OPENAI_TEXT_MODEL
+        logger.info("Text provider: %s (model=%s)", LLM_TEXT_PROVIDER, model)
+    return _text_client
+
+
+def _get_image_client() -> OpenAI:
+    """Return the client for the image provider."""
+    global _image_client, _image_provider_cache
+    if _image_client is None or _image_provider_cache != LLM_IMAGE_PROVIDER:
+        _image_provider_cache = LLM_IMAGE_PROVIDER
+        _image_client = _make_client(LLM_IMAGE_PROVIDER)
+        model = OLLAMA_IMAGE_MODEL if LLM_IMAGE_PROVIDER == "ollama" else OPENAI_IMAGE_MODEL
+        logger.info("Image provider: %s (model=%s)", LLM_IMAGE_PROVIDER, model)
+    return _image_client
 
 
 def _get_model() -> str:
-    """Return the active model name based on provider."""
-    return OLLAMA_MODEL if LLM_PROVIDER == "ollama" else OPENAI_MODEL
+    """Return the active text model name based on provider."""
+    return OLLAMA_TEXT_MODEL if LLM_TEXT_PROVIDER == "ollama" else OPENAI_TEXT_MODEL
+
+
+def _get_image_model() -> str:
+    """Return the active image/vision model name based on provider."""
+    return OLLAMA_IMAGE_MODEL if LLM_IMAGE_PROVIDER == "ollama" else OPENAI_IMAGE_MODEL
 
 
 _THINK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
@@ -152,8 +179,8 @@ def analyze_text(
         last_exchange: Optional (request, response) from the previous analysis.
         on_token: If provided, called with accumulated text on each streamed chunk.
     """
-    client = _get_client()
-    is_ollama = LLM_PROVIDER == "ollama"
+    client = _get_text_client()
+    is_ollama = LLM_TEXT_PROVIDER == "ollama"
 
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
@@ -178,9 +205,10 @@ def analyze_text(
             stream=use_stream,
         )
     except NotFoundError:
+        model = _get_model()
         raise RuntimeError(
-            f"Model '{OLLAMA_MODEL}' not found in Ollama.\n"
-            f"Pull it first:  ollama pull {OLLAMA_MODEL}\n"
+            f"Model '{model}' not found in Ollama.\n"
+            f"Pull it first:  ollama pull {model}\n"
             "Or pick a different model in Settings \u2192 AI Model \u2192 Ollama."
         )
     except APIConnectionError as exc:
@@ -188,7 +216,7 @@ def analyze_text(
             raise RuntimeError(
                 "Cannot connect to Ollama. Make sure Ollama is running:\n"
                 "  1. Install: irm https://ollama.com/install.ps1 | iex\n"
-                f"  2. Pull model: ollama pull {OLLAMA_MODEL}\n"
+                f"  2. Pull model: ollama pull {_get_model()}\n"
                 "  3. Start: ollama serve"
             ) from exc
         raise
@@ -222,7 +250,7 @@ def analyze_text(
 
 def analyze_screenshot(image_bytes: bytes, on_token: "callable | None" = None) -> str:
     """Send a screenshot to the vision model and return insights."""
-    client = _get_client()
+    client = _get_image_client()
     views = prepare_vision_views(image_bytes)
     content: list[dict] = [{"type": "text", "text": VISION_PROMPT}]
 
@@ -256,13 +284,13 @@ def analyze_screenshot(image_bytes: bytes, on_token: "callable | None" = None) -
             }
         )
 
-    is_ollama = LLM_PROVIDER == "ollama"
+    is_ollama = LLM_IMAGE_PROVIDER == "ollama"
     max_tok = 2048 if is_ollama else 4096
     use_stream = on_token is not None
 
     try:
         response = client.chat.completions.create(
-            model=_get_model(),
+            model=_get_image_model(),
             messages=[
                 {
                     "role": "user",
@@ -273,9 +301,10 @@ def analyze_screenshot(image_bytes: bytes, on_token: "callable | None" = None) -
             stream=use_stream,
         )
     except NotFoundError:
+        model = _get_image_model()
         raise RuntimeError(
-            f"Model '{OLLAMA_MODEL}' not found in Ollama.\n"
-            f"Pull it first:  ollama pull {OLLAMA_MODEL}\n"
+            f"Model '{model}' not found in Ollama.\n"
+            f"Pull it first:  ollama pull {model}\n"
             "Or pick a different model in Settings \u2192 AI Model \u2192 Ollama."
         )
     except APIConnectionError as exc:
@@ -283,7 +312,7 @@ def analyze_screenshot(image_bytes: bytes, on_token: "callable | None" = None) -
             raise RuntimeError(
                 "Cannot connect to Ollama. Make sure Ollama is running:\n"
                 "  1. Install: irm https://ollama.com/install.ps1 | iex\n"
-                f"  2. Pull model: ollama pull {OLLAMA_MODEL}\n"
+                f"  2. Pull model: ollama pull {_get_image_model()}\n"
                 "  3. Start: ollama serve"
             ) from exc
         raise

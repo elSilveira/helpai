@@ -53,11 +53,14 @@ DEFAULTS = {
     "AUDIO_CHUNK_DURATION": 30,
     "AUDIO_RING_BUFFER_SECONDS": 120,
     "TRANSCRIPTION_INTERVAL": 3,
-    "LLM_PROVIDER": "openai",
+    "LLM_TEXT_PROVIDER": "openai",
+    "LLM_IMAGE_PROVIDER": "openai",
     "OPENAI_API_KEY": "",
-    "OPENAI_MODEL": "gpt-4o",
+    "OPENAI_TEXT_MODEL": "gpt-4o",
+    "OPENAI_IMAGE_MODEL": "gpt-4o",
     "OLLAMA_BASE_URL": "http://localhost:11434",
-    "OLLAMA_MODEL": "qwen3:8b",
+    "OLLAMA_TEXT_MODEL": "qwen3:8b",
+    "OLLAMA_IMAGE_MODEL": "gemma3:12b",
     "STT_PROVIDER": "auto",
     "XAI_API_KEY": "",
     "STT_LANGUAGE": "en",
@@ -69,6 +72,7 @@ DEFAULTS = {
     "AUDIO_OUTPUT_DEVICE_ID": "",
     "LOCAL_WHISPER_MODEL": "large-v3-turbo",
     "LOCAL_WHISPER_DEVICE": "auto",
+    "KILL_OLLAMA_ON_EXIT": False,
 }
 
 _cache: dict | None = None
@@ -82,6 +86,24 @@ def load() -> dict:
         try:
             with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
                 saved = json.load(f)
+            # Migrate legacy single-model keys → split text/image keys
+            # Migrate legacy single-provider key → split text/image providers
+            if "LLM_PROVIDER" in saved:
+                saved.setdefault("LLM_TEXT_PROVIDER", saved["LLM_PROVIDER"])
+                saved.setdefault("LLM_IMAGE_PROVIDER", saved["LLM_PROVIDER"])
+                del saved["LLM_PROVIDER"]
+            if "OPENAI_MODEL" in saved:
+                saved.setdefault("OPENAI_TEXT_MODEL", saved["OPENAI_MODEL"])
+                saved.setdefault("OPENAI_IMAGE_MODEL", saved["OPENAI_MODEL"])
+                del saved["OPENAI_MODEL"]
+            if "OLLAMA_MODEL" in saved:
+                saved.setdefault("OLLAMA_TEXT_MODEL", saved["OLLAMA_MODEL"])
+                # Only default image model to old value if it was vision-capable
+                _VISION_MODELS = {"gemma3:12b", "gemma4:e2b", "gemma4:e4b",
+                                  "gemma4:26b", "gemma4:31b", "llama4:scout"}
+                if saved["OLLAMA_MODEL"] in _VISION_MODELS:
+                    saved.setdefault("OLLAMA_IMAGE_MODEL", saved["OLLAMA_MODEL"])
+                del saved["OLLAMA_MODEL"]
             settings.update(saved)
             logger.info("Settings loaded from %s", SETTINGS_FILE)
         except Exception:

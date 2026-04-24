@@ -5,8 +5,10 @@ Entry point.  Registers global hotkeys, wires modules together,
 and launches the overlay UI.
 """
 
+import json
 import logging
 import os
+import subprocess
 import sys
 import threading
 from pathlib import Path
@@ -24,10 +26,13 @@ from config import (
     HOTKEY_QUICK_INPUT,
     HOTKEY_SCREENSHOT_FEEDBACK,
     HOTKEY_SHOW_CONVERSATION,
-    LLM_PROVIDER,
+    KILL_OLLAMA_ON_EXIT,
+    LLM_TEXT_PROVIDER,
+    LLM_IMAGE_PROVIDER,
     LOCAL_WHISPER_MODEL,
     OLLAMA_BASE_URL,
-    OLLAMA_MODEL,
+    OLLAMA_TEXT_MODEL,
+    OLLAMA_IMAGE_MODEL,
     SCREENSHOT_FEEDBACK_ENABLED,
 )
 from local_transcriber import is_model_cached, preload_model
@@ -382,6 +387,56 @@ def _stop_capture() -> None:
         logger.info("Capture stopped by user.")
 
 
+def _cleanup_ollama() -> None:
+    """Unload models from GPU and optionally kill the Ollama process."""
+    _uses_ollama = "ollama" in (LLM_TEXT_PROVIDER, LLM_IMAGE_PROVIDER)
+    if not _uses_ollama:
+        return
+
+    # Unload all loaded models from GPU by setting keep_alive to 0
+    models_to_unload = []
+    if LLM_TEXT_PROVIDER == "ollama":
+        models_to_unload.append(OLLAMA_TEXT_MODEL)
+    if LLM_IMAGE_PROVIDER == "ollama":
+        models_to_unload.append(OLLAMA_IMAGE_MODEL)
+    for model in dict.fromkeys(models_to_unload):
+        try:
+            import urllib.request
+            req_data = json.dumps({"model": model, "keep_alive": 0}).encode()
+            req = urllib.request.Request(
+                f"{OLLAMA_BASE_URL}/api/generate",
+                data=req_data,
+                headers={"Content-Type": "application/json"},
+            )
+            resp = urllib.request.urlopen(req, timeout=5)
+            resp.close()
+            logger.info("Unloaded model %s from GPU.", model)
+        except Exception:
+            logger.debug("Failed to unload model %s (non-fatal).", model)
+
+    # Kill the Ollama process if the user opted in
+    if KILL_OLLAMA_ON_EXIT:
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/IM", "ollama.exe"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+                creationflags=0x08000000,  # CREATE_NO_WINDOW
+            )
+            # Also kill the runner/server process
+            subprocess.run(
+                ["taskkill", "/F", "/IM", "ollama_llama_server.exe"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+                creationflags=0x08000000,
+            )
+            logger.info("Ollama processes killed.")
+        except Exception:
+            logger.debug("Failed to kill Ollama process (non-fatal).")
+
+
 def _quit_app() -> None:
     """Clean shutdown — ensure zero leftover processes."""
     logger.info("HelpAI shutting down…")
@@ -409,6 +464,9 @@ def _quit_app() -> None:
             app.root.destroy()
     except Exception:
         pass
+
+    # 5. Unload Ollama models from GPU / kill process
+    _cleanup_ollama()
 
     logger.info("HelpAI stopped by user.")
 
@@ -439,8 +497,9 @@ def main() -> None:
         global capture
         import time
 
-        # Auto-start Ollama server if provider is ollama
-        if LLM_PROVIDER == "ollama":
+        # Auto-start Ollama server if any provider uses ollama
+        _uses_ollama = "ollama" in (LLM_TEXT_PROVIDER, LLM_IMAGE_PROVIDER)
+        if _uses_ollama:
             import shutil, subprocess, os, json
             import urllib.request
             CREATE_NO_WINDOW = 0x08000000
@@ -487,48 +546,54 @@ def main() -> None:
                 if not _ollama_reachable():
                     logger.warning("Ollama server did not start.")
                 else:
-                    # ── Ensure model is pulled ──────────────────────
-                    splash.set_status("Checking Ollama model\u2026")
-                    model_ready = False
-                    try:
-                        req = urllib.request.urlopen(
-                            f"{OLLAMA_BASE_URL}/api/tags", timeout=5)
-                        data = json.loads(req.read())
-                        req.close()
-                        names = [m.get("name", "") for m in data.get("models", [])]
-                        # Match "qwen3:8b" against "qwen3:8b" or "qwen3:8b-..."
-                        model_ready = any(
-                            n == OLLAMA_MODEL or n.startswith(OLLAMA_MODEL + "-")
-                            for n in names
-                        )
-                    except Exception:
-                        logger.debug("Could not list Ollama models.")
-
-                    if not model_ready:
-                        splash.set_status(
-                            f"Downloading model {OLLAMA_MODEL}\u2026\n"
-                            "(first run only \u2014 cached afterwards)"
-                        )
-                        logger.info("Pulling Ollama model %s", OLLAMA_MODEL)
+                    # ── Ensure models are pulled ─────────────────────
+                    _models_needed = []
+                    if LLM_TEXT_PROVIDER == "ollama":
+                        _models_needed.append(OLLAMA_TEXT_MODEL)
+                    if LLM_IMAGE_PROVIDER == "ollama":
+                        _models_needed.append(OLLAMA_IMAGE_MODEL)
+                    _ollama_models = list(dict.fromkeys(_models_needed))
+                    for _m in _ollama_models:
+                        splash.set_status(f"Checking Ollama model {_m}\u2026")
+                        model_ready = False
                         try:
-                            subprocess.run(
-                                ["ollama", "pull", OLLAMA_MODEL],
-                                stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL,
-                                timeout=3600,
-                                creationflags=CREATE_NO_WINDOW,
+                            req = urllib.request.urlopen(
+                                f"{OLLAMA_BASE_URL}/api/tags", timeout=5)
+                            data = json.loads(req.read())
+                            req.close()
+                            names = [m.get("name", "") for m in data.get("models", [])]
+                            model_ready = any(
+                                n == _m or n.startswith(_m + "-")
+                                for n in names
                             )
-                            logger.info("Model %s pulled.", OLLAMA_MODEL)
                         except Exception:
-                            logger.exception("Failed to pull Ollama model.")
-                    else:
-                        logger.info("Ollama model %s is ready.", OLLAMA_MODEL)
+                            logger.debug("Could not list Ollama models.")
 
-                    # Warm up: load model into GPU memory so first request is fast
+                        if not model_ready:
+                            splash.set_status(
+                                f"Downloading model {_m}\u2026\n"
+                                "(first run only \u2014 cached afterwards)"
+                            )
+                            logger.info("Pulling Ollama model %s", _m)
+                            try:
+                                subprocess.run(
+                                    ["ollama", "pull", _m],
+                                    stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL,
+                                    timeout=3600,
+                                    creationflags=CREATE_NO_WINDOW,
+                                )
+                                logger.info("Model %s pulled.", _m)
+                            except Exception:
+                                logger.exception("Failed to pull Ollama model.")
+                        else:
+                            logger.info("Ollama model %s is ready.", _m)
+
+                    # Warm up: load text model into GPU memory so first request is fast
                     splash.set_status("Loading model into GPU\u2026")
                     try:
                         req_data = json.dumps({
-                            "model": OLLAMA_MODEL,
+                            "model": OLLAMA_TEXT_MODEL,
                             "keep_alive": "30m",
                         }).encode()
                         req = urllib.request.Request(
@@ -538,7 +603,7 @@ def main() -> None:
                         )
                         resp = urllib.request.urlopen(req, timeout=120)
                         resp.close()
-                        logger.info("Model %s loaded into memory.", OLLAMA_MODEL)
+                        logger.info("Model %s loaded into memory.", OLLAMA_TEXT_MODEL)
                     except Exception:
                         logger.debug("Model warmup request failed (non-fatal).")
             else:
@@ -630,6 +695,7 @@ def main() -> None:
                 _tray_icon.stop()
         except Exception:
             pass
+        _cleanup_ollama()
         os._exit(0)
         sys.exit(0)
 

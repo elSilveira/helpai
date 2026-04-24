@@ -303,6 +303,8 @@ class OverlayApp:
         self._pending_conv: str | None = None  # buffer when panel hidden
         self._conv_meter_frame: tk.Frame | None = None
         self._audio_level_rows: dict[str, dict[str, object]] = {}
+        self._conv_user_scrolled = False   # True when user scrolls manually
+        self._conv_last_len = 0            # track streaming (content growing)
 
         # ── Insight Panel ──────────────────────────────────────────────
         self._insight_panel: tk.Toplevel | None = None
@@ -589,6 +591,11 @@ class OverlayApp:
         if clear_w:
             clear_w.bind("<Button-1>", lambda _: self.clear_conversation())
 
+        # Detect manual scrolling (same approach as insight panel)
+        text_w.bind("<MouseWheel>", self._on_conv_scroll)
+        text_w.bind("<Button-4>", self._on_conv_scroll)   # Linux scroll up
+        text_w.bind("<Button-5>", self._on_conv_scroll)   # Linux scroll down
+
         self._conv_meter_frame = tk.Frame(panel, bg=_MANTLE)
         self._conv_meter_frame.pack(fill=tk.X, padx=0, before=text_w)
         tk.Frame(self._conv_meter_frame, bg=_SURFACE1, height=1).pack(fill=tk.X, side=tk.BOTTOM)
@@ -628,33 +635,65 @@ class OverlayApp:
             self._conv_text.delete("1.0", tk.END)
             self._conv_text.config(state=tk.DISABLED)
         self._pending_conv = None
+        self._conv_user_scrolled = False
+        self._conv_last_len = 0
         self.on_clear_conversation()
+
+    def _is_conv_near_bottom(self) -> bool:
+        """Return True if conversation text is scrolled to (or near) the bottom."""
+        try:
+            return self._conv_text.yview()[1] >= 0.95
+        except Exception:
+            return True
+
+    def _on_conv_scroll(self, *_args):
+        """Called when user scrolls the conversation panel manually."""
+        if not self._is_conv_near_bottom():
+            self._conv_user_scrolled = True
+        else:
+            self._conv_user_scrolled = False
 
     def _write_conv(self, text: str) -> None:
         """Internal: write text into conversation ScrolledText.
 
         Uses a diff-based approach: if the new text starts with the same
-        content, only the changed tail is rewritten.  This prevents the
-        flicker caused by full delete+insert on every live update.
+        content, only the changed tail is appended.  Respects user scroll
+        position — only auto-scrolls when the user is near the bottom.
         """
         if self._conv_text is None:
             return
+
+        new_len = len(text)
+        is_streaming = new_len > self._conv_last_len and self._conv_last_len > 0
+        self._conv_last_len = new_len
+
         self._conv_text.config(state=tk.NORMAL)
-        existing = self._conv_text.get("1.0", tk.END).rstrip("\n")
-        if text.startswith(existing) and existing:
-            # Only append the new tail.
+        existing = self._conv_text.get("1.0", "end-1c")
+
+        if is_streaming and text.startswith(existing) and existing:
+            # Monotonic growth — just append the tail
             tail = text[len(existing):]
             if tail:
                 self._conv_text.insert(tk.END, tail)
         elif existing.startswith(text) and len(existing) > len(text):
-            # Text got shorter (backup replaced text) — full rewrite.
+            # Text got shorter — full rewrite, preserve scroll
+            ypos = self._conv_text.yview()
             self._conv_text.delete("1.0", tk.END)
             self._conv_text.insert(tk.END, text)
+            if self._conv_user_scrolled:
+                self._conv_text.yview_moveto(ypos[0])
         else:
+            ypos = self._conv_text.yview()
             self._conv_text.delete("1.0", tk.END)
             self._conv_text.insert(tk.END, text)
+            if self._conv_user_scrolled:
+                self._conv_text.yview_moveto(ypos[0])
+
         self._conv_text.config(state=tk.DISABLED)
-        self._conv_text.see(tk.END)
+
+        # Only auto-scroll if user hasn't scrolled away
+        if not self._conv_user_scrolled:
+            self._conv_text.see(tk.END)
 
     def _build_audio_meter_row(self, parent: tk.Frame, title: str) -> dict[str, object]:
         """Create one conversation-panel audio meter row."""
@@ -938,6 +977,7 @@ class OverlayApp:
         win._nav_buttons = {}
         win._panels = {}
         win._active_section = "llm"
+        win._ollama_pulled = SettingsWindow._init_ollama_pulled()
 
         # Build as Toplevel under our root
         win.root = tk.Toplevel(self.root)
@@ -1308,7 +1348,8 @@ class OverlayApp:
         self._conv_text.config(state=tk.NORMAL)
         self._conv_text.insert(tk.END, text)
         self._conv_text.config(state=tk.DISABLED)
-        self._conv_text.see(tk.END)
+        if not self._conv_user_scrolled:
+            self._conv_text.see(tk.END)
 
     def _is_insight_near_bottom(self) -> bool:
         """Return True if insight text is scrolled to (or near) the bottom."""
@@ -1337,22 +1378,31 @@ class OverlayApp:
         is_streaming = new_len > self._insight_last_len and self._insight_last_len > 0
         self._insight_last_len = new_len
 
-        # Save scroll position before replacing
-        was_near_bottom = self._is_insight_near_bottom()
-
-        self._insight_text.config(state=tk.NORMAL)
-        self._insight_text.delete("1.0", tk.END)
-        self._insight_text.insert(tk.END, text)
-        self._insight_text.config(state=tk.DISABLED)
-
         if is_streaming:
-            # During streaming: follow bottom unless user scrolled up
-            if not self._insight_user_scrolled:
-                self._insight_text.see(tk.END)
+            # Delta-append: only insert new characters, scroll stays untouched
+            current = self._insight_text.get("1.0", "end-1c")
+            if text.startswith(current):
+                # Monotonic growth — just append the tail
+                delta = text[len(current):]
+                if delta:
+                    self._insight_text.config(state=tk.NORMAL)
+                    self._insight_text.insert(tk.END, delta)
+                    self._insight_text.config(state=tk.DISABLED)
+            else:
+                # Content changed shape (e.g. thinking tags stripped) — full replace
+                ypos = self._insight_text.yview()
+                self._insight_text.config(state=tk.NORMAL)
+                self._insight_text.delete("1.0", tk.END)
+                self._insight_text.insert(tk.END, text)
+                self._insight_text.config(state=tk.DISABLED)
+                self._insight_text.yview_moveto(ypos[0])
         else:
-            # New (non-streaming) content: scroll to top, reset state
+            # Brand new content: full replace, scroll to top
+            self._insight_text.config(state=tk.NORMAL)
+            self._insight_text.delete("1.0", tk.END)
+            self._insight_text.insert(tk.END, text)
+            self._insight_text.config(state=tk.DISABLED)
             self._insight_text.see("1.0")
-            self._insight_user_scrolled = False
             self._insight_last_len = new_len
 
         self._auto_expand_insight()
@@ -1368,8 +1418,6 @@ class OverlayApp:
         self._insight_text.config(state=tk.NORMAL)
         self._insight_text.insert(tk.END, "\n" + text)
         self._insight_text.config(state=tk.DISABLED)
-        if not self._insight_user_scrolled:
-            self._insight_text.see(tk.END)
 
     def _auto_expand_insight(self) -> None:
         """Expand the insight panel height on first show only; never move it after."""

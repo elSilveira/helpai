@@ -16,6 +16,7 @@ import settings as store
 from config import (
     APP_NAME,
     APP_VERSION,
+    OLLAMA_BASE_URL,
     OVERLAY_BG_COLOR,
     OVERLAY_FG_COLOR,
     OVERLAY_ACCENT_COLOR,
@@ -47,6 +48,159 @@ _CARD     = _SURFACE0
 
 _FONT     = OVERLAY_FONT_FAMILY
 _ICON_SIZE = 18
+
+# ── Ollama model catalogue with vision capability tags ──────────────────────
+# (display_label, model_id, supports_vision)
+_OLLAMA_MODELS = [
+    ("Qwen3 8B  •  fast, top code/math",       "qwen3:8b",          False),
+    ("Qwen3 14B  •  best quality, slower",      "qwen3:14b",         False),
+    ("DeepSeek-R1 7B  •  strong reasoning",     "deepseek-r1:7b",    False),
+    ("DeepSeek-R1 14B  •  top reasoning",       "deepseek-r1:14b",   False),
+    ("Phi-4 Mini 3.8B  •  ultrafast math",      "phi4-mini",         False),
+    ("Phi-4 14B  •  math/reasoning",            "phi4:14b",          False),
+    ("Gemma 3 12B  •  multimodal, 128K",        "gemma3:12b",        True),
+    ("Gemma 4 E2B  •  tiny, phone-ready, 7GB",  "gemma4:e2b",        True),
+    ("Gemma 4 E4B  •  small edge, multimodal",  "gemma4:e4b",        True),
+    ("Gemma 4 26B MoE  •  frontier, 256K",      "gemma4:26b",        True),
+    ("Gemma 4 31B  •  best Gemma, 256K",        "gemma4:31b",        True),
+    ("Mistral Nemo 12B  •  fast multilingual",  "mistral-nemo:12b",  False),
+    ("GLM-4 9B  •  beats Llama on code",        "glm4:9b",           False),
+    ("Llama 4 Scout 17B  •  multimodal",        "llama4:scout",      True),
+]
+
+_OLLAMA_ALL_MODELS   = [(lbl, val) for lbl, val, _   in _OLLAMA_MODELS]
+_OLLAMA_VISION_MODELS = [(lbl, val) for lbl, val, vis in _OLLAMA_MODELS if vis]
+
+
+def _query_ollama_models() -> set[str]:
+    """Return the set of model ids currently pulled in Ollama (best-effort)."""
+    try:
+        import json, urllib.request
+        req = urllib.request.urlopen(f"{OLLAMA_BASE_URL}/api/tags", timeout=3)
+        data = json.loads(req.read())
+        req.close()
+        names: set[str] = set()
+        for m in data.get("models", []):
+            n = m.get("name", "")
+            names.add(n)
+            # Also add base name without tag variant (e.g. "qwen3:8b" from "qwen3:8b-q4_0")
+            if "-" in n.split(":")[-1]:
+                names.add(n.rsplit("-", 1)[0])
+        return names
+    except Exception:
+        return set()
+
+
+class _Tooltip:
+    """Hover tooltip for any tkinter widget — Catppuccin styled."""
+
+    def __init__(self, widget: tk.Widget, text: str):
+        self._widget = widget
+        self._text = text
+        self._tip: tk.Toplevel | None = None
+        widget.bind("<Enter>", self._show, add="+")
+        widget.bind("<Leave>", self._hide, add="+")
+
+    def update_text(self, text: str):
+        self._text = text
+        if self._tip:
+            for child in self._tip.winfo_children():
+                if isinstance(child, tk.Label):
+                    child.config(text=text)
+
+    def _show(self, _event=None):
+        if self._tip or not self._text:
+            return
+        x = self._widget.winfo_rootx()
+        y = self._widget.winfo_rooty() + self._widget.winfo_height() + 4
+        self._tip = tw = tk.Toplevel(self._widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_attributes("-topmost", True)
+        lbl = tk.Label(
+            tw, text=self._text, justify=tk.LEFT,
+            bg=_CRUST, fg=_TEXT,
+            font=(_FONT, 10), padx=10, pady=6,
+            relief=tk.SOLID, borderwidth=1,
+            highlightbackground=_SURFACE1, highlightthickness=1,
+            wraplength=500,
+        )
+        lbl.pack()
+        tw.wm_geometry(f"+{x}+{y}")
+
+    def _hide(self, _event=None):
+        if self._tip:
+            self._tip.destroy()
+            self._tip = None
+
+
+class _DropdownItemTooltip:
+    """Shows a tooltip for individual items inside an open ttk.Combobox dropdown."""
+
+    def __init__(self, combo: ttk.Combobox):
+        self._combo = combo
+        self._tip: tk.Toplevel | None = None
+        self._last_index: int = -1
+        self._bound = False
+        # Hook into the dropdown open/close events
+        combo.bind("<ButtonPress-1>", self._on_open, add="+")
+        combo.bind("<<ComboboxSelected>>", self._dismiss, add="+")
+
+    def _on_open(self, _event=None):
+        """After the dropdown popdown appears, find its Listbox and bind Motion."""
+        self._combo.after(50, self._attach_listbox)
+
+    def _attach_listbox(self):
+        """Locate the internal Tk popdown listbox and bind hover events."""
+        try:
+            # Tk stores the popdown path in the combobox's popdown widget
+            popdown = self._combo.tk.call("ttk::combobox::PopdownWindow", self._combo)
+            lb = self._combo.nametowidget(f"{popdown}.f.l")
+            if not self._bound:
+                lb.bind("<Motion>", self._on_motion)
+                lb.bind("<Leave>", self._dismiss)
+                self._bound = True
+        except Exception:
+            pass
+
+    def _on_motion(self, event):
+        """Show tooltip for the item under the cursor."""
+        try:
+            lb = event.widget
+            index = lb.nearest(event.y)
+            if index == self._last_index and self._tip:
+                return
+            self._last_index = index
+            text = lb.get(index)
+            self._dismiss()
+            if not text:
+                return
+            # Position the tooltip to the right of the dropdown listbox
+            x = lb.winfo_rootx() + lb.winfo_width() + 4
+            y = lb.winfo_rooty() + event.y - 10
+            self._tip = tw = tk.Toplevel(lb)
+            tw.wm_overrideredirect(True)
+            tw.wm_attributes("-topmost", True)
+            lbl = tk.Label(
+                tw, text=text, justify=tk.LEFT,
+                bg=_CRUST, fg=_TEXT,
+                font=(_FONT, 10), padx=10, pady=6,
+                relief=tk.SOLID, borderwidth=1,
+                highlightbackground=_SURFACE1, highlightthickness=1,
+                wraplength=500,
+            )
+            lbl.pack()
+            tw.wm_geometry(f"+{x}+{y}")
+        except Exception:
+            pass
+
+    def _dismiss(self, _event=None):
+        self._last_index = -1
+        if self._tip:
+            try:
+                self._tip.destroy()
+            except Exception:
+                pass
+            self._tip = None
 
 
 def _make_draggable(window: tk.Tk | tk.Toplevel, *handles: tk.Widget) -> None:
@@ -119,6 +273,7 @@ class SettingsWindow:
         self._nav_buttons: dict[str, tk.Label] = {}
         self._panels: dict[str, tk.Frame] = {}
         self._active_section: str = "llm"
+        self._ollama_pulled: set[str] = self._init_ollama_pulled()
 
         self.root = tk.Tk()
         self.root.title(f"{APP_NAME} — Settings")
@@ -135,6 +290,11 @@ class SettingsWindow:
         self._build()
 
     # ── Layout skeleton ────────────────────────────────────────────────
+
+    @staticmethod
+    def _init_ollama_pulled() -> set[str]:
+        """Query Ollama for pulled models (callable without an instance)."""
+        return _query_ollama_models()
 
     def _build(self):
         # Title bar
@@ -277,36 +437,33 @@ class SettingsWindow:
 
         # Provider card
         card = self._card(p, "Provider")
-        self._combo_row(card, "LLM Provider", "LLM_PROVIDER", f,
+        self._combo_row(card, "Text Provider", "LLM_TEXT_PROVIDER", f,
                         [("OpenAI API", "openai"), ("Ollama (Local)", "ollama")], width=20)
-        self._hint(card, "Ollama runs models locally — no API key needed")
+        self._combo_row(card, "Image Provider", "LLM_IMAGE_PROVIDER", f,
+                        [("OpenAI API", "openai"), ("Ollama (Local)", "ollama")], width=20)
+        self._hint(card, "You can mix providers — e.g. Ollama for text, OpenAI for images")
 
         # OpenAI card
         card = self._card(p, "OpenAI")
         self._text_row(card, "API Key", "OPENAI_API_KEY", f, show="•")
-        self._text_row(card, "Model", "OPENAI_MODEL", f)
-        self._hint(card, "gpt-4o  ·  gpt-4o-mini  ·  gpt-4-turbo")
+        self._text_row(card, "Text Model", "OPENAI_TEXT_MODEL", f)
+        self._hint(card, "gpt-4o  ·  gpt-4o-mini  ·  o3-mini  ·  any text model")
+        self._text_row(card, "Image Model", "OPENAI_IMAGE_MODEL", f)
+        self._hint(card, "gpt-4o  ·  gpt-4o-mini  ·  gpt-4-turbo  (must support vision)")
 
         # Ollama card
         card = self._card(p, "Ollama (Local)")
         self._text_row(card, "Server URL", "OLLAMA_BASE_URL", f)
-        self._combo_row(card, "Model", "OLLAMA_MODEL", f,
-                        [("Qwen3 8B  •  fast, top code/math", "qwen3:8b"),
-                         ("Qwen3 14B  •  best quality, slower", "qwen3:14b"),
-                         ("DeepSeek-R1 7B  •  strong reasoning", "deepseek-r1:7b"),
-                         ("DeepSeek-R1 14B  •  top reasoning", "deepseek-r1:14b"),
-                         ("Phi-4 Mini 3.8B  •  ultrafast math", "phi4-mini"),
-                         ("Phi-4 14B  •  math/reasoning", "phi4:14b"),
-                         ("Gemma 3 12B  •  multimodal, 128K", "gemma3:12b"),
-                         ("Gemma 4 E2B  •  tiny, phone-ready, 7GB", "gemma4:e2b"),
-                         ("Gemma 4 E4B  •  small edge, multimodal", "gemma4:e4b"),
-                         ("Gemma 4 26B MoE  •  frontier, 256K", "gemma4:26b"),
-                         ("Gemma 4 31B  •  best Gemma, 256K", "gemma4:31b"),
-                         ("Mistral Nemo 12B  •  fast multilingual", "mistral-nemo:12b"),
-                         ("GLM-4 9B  •  beats Llama on code", "glm4:9b"),
-                         ("Llama 4 Scout 17B  •  multimodal", "llama4:scout"),
-                         ],
-                        width=30)
+        self._combo_row(card, "Text Model", "OLLAMA_TEXT_MODEL", f,
+                        _OLLAMA_ALL_MODELS, width=30)
+        self._hint(card, "Used for conversation / transcript analysis")
+        self._combo_row(card, "Image Model", "OLLAMA_IMAGE_MODEL", f,
+                        _OLLAMA_VISION_MODELS, width=30)
+        self._hint(card, "Used for screenshot analysis — only vision-capable models shown")
+        self._combo_row(card, "Close Ollama on Exit", "KILL_OLLAMA_ON_EXIT", f,
+                        [("Disabled — keep Ollama running", False),
+                         ("Enabled — kill Ollama process", True)], width=30)
+        self._hint(card, "Models are always unloaded from GPU on exit")
 
         # Status + setup button row
         import shutil
@@ -452,22 +609,24 @@ class SettingsWindow:
     # ── Ollama setup ───────────────────────────────────────────────────
 
     def _setup_ollama(self):
-        """Install Ollama, pull the selected model, and start the server."""
+        """Install Ollama, pull the selected models, and start the server."""
         import os, subprocess, shutil, threading, time
 
-        # Read the currently selected model from the combo (StringVar + choice map)
-        model = "qwen3:8b"
-        widget = self._entries.get("OLLAMA_MODEL")
-        if widget is not None:
-            display_val = widget.get() if isinstance(widget, tk.StringVar) else (
-                widget.get().strip() if isinstance(widget, tk.Entry) else ""
-            )
-            if display_val:
-                # Resolve display label → actual value via choice map
-                choice_map = self._choice_maps.get("OLLAMA_MODEL", {})
-                model = choice_map.get(display_val, display_val)
-        if not model:
-            model = "qwen3:8b"
+        # Read the currently selected text and image models
+        def _resolve_model(settings_key, fallback):
+            widget = self._entries.get(settings_key)
+            if widget is not None:
+                display_val = widget.get() if isinstance(widget, tk.StringVar) else (
+                    widget.get().strip() if isinstance(widget, tk.Entry) else ""
+                )
+                if display_val:
+                    choice_map = self._choice_maps.get(settings_key, {})
+                    return choice_map.get(display_val, display_val)
+            return fallback
+
+        text_model = _resolve_model("OLLAMA_TEXT_MODEL", "qwen3:8b")
+        image_model = _resolve_model("OLLAMA_IMAGE_MODEL", "gemma3:12b")
+        models_to_pull = list(dict.fromkeys([text_model, image_model]))  # dedupe, keep order
 
         # ── Progress dialog ────────────────────────────────────────────
         prog = tk.Toplevel(self.root)
@@ -508,10 +667,11 @@ class SettingsWindow:
         # Model badge
         model_row = tk.Frame(prog, bg=_CRUST)
         model_row.pack(fill=tk.X, padx=20, pady=(6, 0))
-        tk.Label(model_row, text="Model:", bg=_CRUST, fg=_OVERLAY0,
+        tk.Label(model_row, text="Models:", bg=_CRUST, fg=_OVERLAY0,
                  font=(_FONT, 9)).pack(side=tk.LEFT)
-        tk.Label(model_row, text=f"  {model}  ", bg=_SURFACE0, fg=_GREEN,
-                 font=(_FONT, 10, "bold")).pack(side=tk.LEFT, padx=(6, 0))
+        for m in models_to_pull:
+            tk.Label(model_row, text=f"  {m}  ", bg=_SURFACE0, fg=_GREEN,
+                     font=(_FONT, 10, "bold")).pack(side=tk.LEFT, padx=(6, 0))
 
         # Status line
         status_var = tk.StringVar(value="Checking installation…")
@@ -725,19 +885,23 @@ class SettingsWindow:
             time.sleep(3)
             _log("")
 
-            # 3. Pull model ──────────────────────────────────────────
-            _status(f"Pulling model '{model}'…")
-            _log(f"Downloading model: {model}")
-            _log("This can take several minutes for large models.\n")
-            ok = _stream_cmd(
-                ["ollama", "pull", model],
-                "Model pull", timeout_s=3600,
-            )
+            # 3. Pull models ─────────────────────────────────────────
+            all_ok = True
+            for idx, model in enumerate(models_to_pull, 1):
+                _status(f"Pulling model '{model}' ({idx}/{len(models_to_pull)})…")
+                _log(f"Downloading model: {model}")
+                _log("This can take several minutes for large models.\n")
+                ok = _stream_cmd(
+                    ["ollama", "pull", model],
+                    f"Model pull ({model})", timeout_s=3600,
+                )
+                if not ok:
+                    all_ok = False
+                _log("")
 
-            _log("")
-            if ok:
+            if all_ok:
                 _status("✓  Ready!")
-                _log(f"Model '{model}' is ready — select Ollama as provider and launch!")
+                _log("All models are ready — select Ollama as provider and launch!")
                 # Update the status label in the settings panel
                 try:
                     prog.after(0, lambda: self._ollama_status_lbl.config(
@@ -876,6 +1040,40 @@ class SettingsWindow:
         )
         combo.pack(side=tk.LEFT, padx=(4, 0))
         self._entries[key] = var
+
+        # Attach per-item dropdown tooltip for combos with long labels
+        has_tuple_options = options and isinstance(options[0], tuple)
+        if has_tuple_options:
+            _DropdownItemTooltip(combo)
+
+        # Add tooltip + download badge for Ollama model dropdowns
+        is_ollama_model = key in ("OLLAMA_TEXT_MODEL", "OLLAMA_IMAGE_MODEL")
+        if is_ollama_model:
+            badge = tk.Label(row, text="", bg=_CARD, font=(_FONT, 9))
+            badge.pack(side=tk.LEFT, padx=(6, 0))
+            tip = _Tooltip(combo, var.get())
+
+            def _on_select(_e=None, _var=var, _tip=tip, _badge=badge,
+                           _l2v=label_to_value if options and isinstance(options[0], tuple) else None,
+                           _pulled=self._ollama_pulled):
+                display = _var.get()
+                model_id = _l2v.get(display, display) if _l2v else display
+                _tip.update_text(display)
+                # Update download badge
+                if model_id in _pulled:
+                    _badge.config(text="  ✓ pulled  ", fg=_GREEN)
+                else:
+                    _badge.config(text="  ↓ not pulled  ", fg=_YELLOW)
+
+            combo.bind("<<ComboboxSelected>>", _on_select)
+            # Trigger initial state
+            combo.after(100, _on_select)
+        elif options and isinstance(options[0], tuple):
+            # Generic tooltip for other combos with long labels
+            tip = _Tooltip(combo, var.get())
+            def _on_select_generic(_e=None, _var=var, _tip=tip):
+                _tip.update_text(_var.get())
+            combo.bind("<<ComboboxSelected>>", _on_select_generic)
 
     # ── Actions ────────────────────────────────────────────────────────
 
