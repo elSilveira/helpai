@@ -73,6 +73,7 @@ DEFAULTS = {
     "LOCAL_WHISPER_MODEL": "large-v3-turbo",
     "LOCAL_WHISPER_DEVICE": "auto",
     "KILL_OLLAMA_ON_EXIT": False,
+    "RESPONSE_PROFILE": "software_engineer",
 }
 
 _cache: dict | None = None

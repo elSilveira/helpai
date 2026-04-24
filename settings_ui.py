@@ -450,6 +450,8 @@ class SettingsWindow:
     # ── Section switching ──────────────────────────────────────────────
 
     def _switch_section(self, key: str):
+        if key not in self._panels:
+            return  # panels not built yet (still loading)
         self._active_section = key
         # Hide all panels
         for p in self._panels.values():
@@ -494,6 +496,16 @@ class SettingsWindow:
         f = (_FONT, 11)
 
         self._panel_header(p, "AI Model Configuration", "Choose between cloud API or fully local inference")
+
+        # Response Profile card (hot-reloaded — no restart needed)
+        card = self._card(p, "Response Profile")
+        self._combo_row(card, "AI Persona", "RESPONSE_PROFILE", f,
+                        [("Software Engineer", "software_engineer"),
+                         ("Tech Lead", "tech_lead"),
+                         ("Sales Professional", "seller"),
+                         ("HR Professional", "hr"),
+                         ("Trainer / Coach", "trainer")], width=22)
+        self._hint(card, "Changes apply instantly — no restart required")
 
         # Provider card
         card = self._card(p, "Provider")
