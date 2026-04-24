@@ -18,7 +18,7 @@ from helpai_version import __version__ as APP_VERSION
 ROOT = Path(__file__).resolve().parent
 DIST = ROOT / "dist"
 BUILD = ROOT / "build_temp"
-ENTRY = ROOT / "launcher.py"
+ENTRY = ROOT / "main.py"
 
 HIDDEN_IMPORTS = [
     "soundcard",

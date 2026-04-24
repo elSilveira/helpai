@@ -438,40 +438,56 @@ def _cleanup_ollama() -> None:
 
 
 def _quit_app() -> None:
-    """Clean shutdown — ensure zero leftover processes."""
+    """Clean shutdown — show closing overlay while cleanup runs."""
     logger.info("HelpAI shutting down…")
 
-    # 1. Stop audio capture threads
-    if capture and capture.is_running:
-        capture.stop()
-
-    # 2. Unhook all global hotkeys
+    # Show a closing overlay so the user knows it's shutting down
     try:
-        keyboard.unhook_all()
+        from overlay import ClosingSplash
+        splash = ClosingSplash(app.root if app else None)
     except Exception:
-        pass
+        splash = None
 
-    # 3. Stop system tray icon
-    try:
-        if _tray_icon:
-            _tray_icon.stop()
-    except Exception:
-        pass
+    def _do_cleanup():
+        # 1. Stop audio capture threads
+        if capture and capture.is_running:
+            capture.stop()
 
-    # 4. Destroy the tkinter root (closes all windows)
+        # 2. Unhook all global hotkeys
+        try:
+            keyboard.unhook_all()
+        except Exception:
+            pass
+
+        # 3. Stop system tray icon
+        try:
+            if _tray_icon:
+                _tray_icon.stop()
+        except Exception:
+            pass
+
+        # 4. Unload Ollama models from GPU / kill process
+        _cleanup_ollama()
+
+        logger.info("HelpAI stopped by user.")
+
+        # 5. Force-terminate the process to kill any lingering daemon threads
+        os._exit(0)
+
+    # Hide the main overlay immediately, run cleanup in background
     try:
         if app and app.root:
-            app.root.destroy()
+            app.hide()
     except Exception:
         pass
 
-    # 5. Unload Ollama models from GPU / kill process
-    _cleanup_ollama()
-
-    logger.info("HelpAI stopped by user.")
-
-    # 5. Force-terminate the process to kill any lingering daemon threads
-    os._exit(0)
+    threading.Thread(target=_do_cleanup, daemon=True).start()
+    # If splash exists, run its brief mainloop (auto-closes on os._exit)
+    if splash:
+        try:
+            splash.run()
+        except Exception:
+            pass
 
 
 def _open_settings() -> None:

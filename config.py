@@ -119,10 +119,10 @@ OVERLAY_POSITION_X = 60             # px from right edge of primary monitor
 OVERLAY_POSITION_Y = 60             # px from top edge
 
 # ─── Hotkeys (user-overridable) ────────────────────────────────────────────
-HOTKEY_AUDIO_ANALYSIS = _user.get("HOTKEY_AUDIO_ANALYSIS", "ctrl+d")
-HOTKEY_SCREENSHOT_FEEDBACK = _user.get("HOTKEY_SCREENSHOT_FEEDBACK", "ctrl+e")
+HOTKEY_AUDIO_ANALYSIS = _user.get("HOTKEY_AUDIO_ANALYSIS", "ctrl+shift+d")
+HOTKEY_SCREENSHOT_FEEDBACK = _user.get("HOTKEY_SCREENSHOT_FEEDBACK", "ctrl+shift+e")
 HOTKEY_QUICK_INPUT = _user.get("HOTKEY_QUICK_INPUT", "ctrl+shift+enter")
-HOTKEY_SHOW_CONVERSATION = _user.get("HOTKEY_SHOW_CONVERSATION", "ctrl+s")
+HOTKEY_SHOW_CONVERSATION = _user.get("HOTKEY_SHOW_CONVERSATION", "ctrl+shift+s")
 
 # ─── Visibility Control ────────────────────────────────────────────────────
 # Windows Display Affinity flag to exclude window from capture APIs.

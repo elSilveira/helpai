@@ -157,6 +157,80 @@ def _add_tooltip(widget: tk.Widget, text: str) -> None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+#  ClosingSplash
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class ClosingSplash:
+    """Small overlay shown while the app is shutting down."""
+
+    def __init__(self, parent: "tk.Tk | None" = None) -> None:
+        self.root = tk.Toplevel(parent) if parent else tk.Tk()
+        self.root.overrideredirect(True)
+        self.root.attributes("-topmost", True)
+        self.root.configure(bg=_CRUST, highlightbackground=_SURFACE1,
+                            highlightthickness=1)
+
+        w, h = 300, 90
+        sw = self.root.winfo_screenwidth()
+        sh = self.root.winfo_screenheight()
+        self.root.geometry(f"{w}x{h}+{(sw - w) // 2}+{(sh - h) // 2}")
+
+        # Top accent line
+        tk.Frame(self.root, bg=_RED, height=2).pack(fill=tk.X, side=tk.TOP)
+
+        inner = tk.Frame(self.root, bg=_CRUST)
+        inner.pack(fill=tk.BOTH, expand=True, padx=24, pady=14)
+
+        tk.Label(
+            inner,
+            text="Closing HelpAI\u2026",
+            bg=_CRUST,
+            fg=_TEXT,
+            font=(OVERLAY_FONT_FAMILY, 12, "bold"),
+        ).pack(anchor="w")
+
+        tk.Label(
+            inner,
+            text="Releasing resources",
+            bg=_CRUST,
+            fg=_SUBTEXT,
+            font=(OVERLAY_FONT_FAMILY, 9),
+        ).pack(anchor="w", pady=(4, 0))
+
+        # Animated progress bar
+        bar_frame = tk.Frame(inner, bg=_SURFACE0, height=3)
+        bar_frame.pack(fill=tk.X, pady=(8, 0))
+        bar_frame.pack_propagate(False)
+        self._bar = tk.Frame(bar_frame, bg=_RED, width=0)
+        self._bar.pack(side=tk.LEFT, fill=tk.Y)
+
+        self._frame = 0
+        self._after_id: str | None = None
+        _apply_exclusion(self.root)
+        self._animate()
+
+    def _animate(self) -> None:
+        self._frame = (self._frame + 1) % 40
+        try:
+            bar_w = self._bar.master.winfo_width()
+            if bar_w > 1:
+                pos = abs((self._frame % 40) - 20) / 20.0
+                w = max(20, int(bar_w * 0.35))
+                x = int((bar_w - w) * pos)
+                self._bar.place(x=x, y=0, width=w, relheight=1.0)
+        except Exception:
+            pass
+        self._after_id = self.root.after(50, self._animate)
+
+    def run(self) -> None:
+        try:
+            self.root.mainloop()
+        except Exception:
+            pass
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 #  LoadingSplash
 # ═══════════════════════════════════════════════════════════════════════════
 
