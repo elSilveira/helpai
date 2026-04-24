@@ -1051,7 +1051,9 @@ class OverlayApp:
         win._nav_buttons = {}
         win._panels = {}
         win._active_section = "llm"
-        win._ollama_pulled = SettingsWindow._init_ollama_pulled()
+        win._ollama_pulled = set()
+        win._mic_choices = []
+        win._spk_choices = []
 
         # Build as Toplevel under our root
         win.root = tk.Toplevel(self.root)

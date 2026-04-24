@@ -273,7 +273,9 @@ class SettingsWindow:
         self._nav_buttons: dict[str, tk.Label] = {}
         self._panels: dict[str, tk.Frame] = {}
         self._active_section: str = "llm"
-        self._ollama_pulled: set[str] = self._init_ollama_pulled()
+        self._ollama_pulled: set[str] = set()
+        self._mic_choices: list = []
+        self._spk_choices: list = []
 
         self.root = tk.Tk()
         self.root.title(f"{APP_NAME} — Settings")
@@ -377,14 +379,72 @@ class SettingsWindow:
         self._main = tk.Frame(body, bg=_BASE)
         self._main.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=0)
 
-        # Build each section panel
+        # Show loading screen while fetching data in background
+        self._show_loading()
+        import threading
+        threading.Thread(target=self._load_data_async, daemon=True).start()
+
+    # ── Async data loading ─────────────────────────────────────────────
+
+    def _show_loading(self):
+        """Display a loading overlay while background data is fetched."""
+        self._loading_frame = tk.Frame(self._main, bg=_BASE)
+        self._loading_frame.pack(fill=tk.BOTH, expand=True)
+
+        inner = tk.Frame(self._loading_frame, bg=_BASE)
+        inner.place(relx=0.5, rely=0.45, anchor="center")
+
+        tk.Label(
+            inner, text="⚙", bg=_BASE, fg=_ACCENT,
+            font=(_FONT, 28),
+        ).pack()
+
+        self._loading_dots_var = tk.StringVar(value="Loading settings")
+        tk.Label(
+            inner, textvariable=self._loading_dots_var,
+            bg=_BASE, fg=_SUBTEXT, font=(_FONT, 11),
+        ).pack(pady=(10, 0))
+
+        tk.Label(
+            inner, text="Detecting devices & models…",
+            bg=_BASE, fg=_OVERLAY0, font=(_FONT, 9),
+        ).pack(pady=(4, 0))
+
+        self._loading_dot_idx = 0
+        self._loading_anim_id = None
+        self._animate_loading()
+
+    def _animate_loading(self):
+        dots = "." * (self._loading_dot_idx % 4)
+        try:
+            self._loading_dots_var.set(f"Loading settings{dots}")
+            self._loading_dot_idx += 1
+            self._loading_anim_id = self.root.after(400, self._animate_loading)
+        except Exception:
+            pass
+
+    def _load_data_async(self):
+        """Fetch slow data (Ollama models, audio devices) in a background thread."""
+        self._ollama_pulled = _query_ollama_models()
+        self._mic_choices = list_microphone_choices()
+        self._spk_choices = list_speaker_choices()
+        try:
+            self.root.after(0, self._finish_build)
+        except Exception:
+            pass
+
+    def _finish_build(self):
+        """Build all setting panels after background data is ready."""
+        if self._loading_anim_id:
+            self.root.after_cancel(self._loading_anim_id)
+            self._loading_anim_id = None
+        self._loading_frame.destroy()
+
         self._build_llm_panel()
         self._build_audio_panel()
         self._build_stt_panel()
         self._build_hotkeys_panel()
         self._build_appearance_panel()
-
-        # Show initial section
         self._switch_section("llm")
 
     # ── Section switching ──────────────────────────────────────────────
@@ -510,9 +570,9 @@ class SettingsWindow:
 
         card = self._card(p, "Devices")
         self._combo_row(card, "Microphone", "AUDIO_INPUT_DEVICE_ID", f,
-                        list_microphone_choices(), width=32)
+                        self._mic_choices, width=32)
         self._combo_row(card, "Speaker / Loopback", "AUDIO_OUTPUT_DEVICE_ID", f,
-                        list_speaker_choices(), width=32)
+                        self._spk_choices, width=32)
         self._hint(card, "Leave empty for system default")
 
     def _build_stt_panel(self):
