@@ -320,20 +320,11 @@ _last_transcript_text: str = ""
 
 
 def _format_paragraphs(raw: str) -> str:
-    """Format transcript lines into paragraphs using sentence endings."""
+    """Format transcript lines into flowing text, joining segments naturally."""
     segments = [segment.strip() for segment in raw.strip().split("\n") if segment.strip()]
     if not segments:
         return ""
-    paragraphs: list[str] = []
-    current_parts: list[str] = []
-    for segment in segments:
-        current_parts.append(segment)
-        if segment.endswith((".", "!", "?", "…", ".\"", "!\"", "?\"", ".'", "!'", "?'")):
-            paragraphs.append(" ".join(current_parts))
-            current_parts = []
-    if current_parts:
-        paragraphs.append(" ".join(current_parts))
-    return "\n\n".join(paragraphs)
+    return " ".join(segments)
 
 
 def _on_transcript_update(input_text: str, output_text: str) -> None:
@@ -605,23 +596,24 @@ def main() -> None:
                         else:
                             logger.info("Ollama model %s is ready.", _m)
 
-                    # Warm up: load text model into GPU memory so first request is fast
-                    splash.set_status("Loading model into GPU\u2026")
-                    try:
-                        req_data = json.dumps({
-                            "model": OLLAMA_TEXT_MODEL,
-                            "keep_alive": "30m",
-                        }).encode()
-                        req = urllib.request.Request(
-                            f"{OLLAMA_BASE_URL}/api/generate",
-                            data=req_data,
-                            headers={"Content-Type": "application/json"},
-                        )
-                        resp = urllib.request.urlopen(req, timeout=120)
-                        resp.close()
-                        logger.info("Model %s loaded into memory.", OLLAMA_TEXT_MODEL)
-                    except Exception:
-                        logger.debug("Model warmup request failed (non-fatal).")
+                    # Warm up: load configured ollama models into GPU memory
+                    for _warmup_model in _ollama_models:
+                        splash.set_status("Loading model into GPU\u2026")
+                        try:
+                            req_data = json.dumps({
+                                "model": _warmup_model,
+                                "keep_alive": "30m",
+                            }).encode()
+                            req = urllib.request.Request(
+                                f"{OLLAMA_BASE_URL}/api/generate",
+                                data=req_data,
+                                headers={"Content-Type": "application/json"},
+                            )
+                            resp = urllib.request.urlopen(req, timeout=120)
+                            resp.close()
+                            logger.info("Model %s loaded into memory.", _warmup_model)
+                        except Exception:
+                            logger.debug("Model warmup request failed for %s (non-fatal).", _warmup_model)
             else:
                 logger.warning("Ollama provider selected but ollama not found on PATH.")
 

@@ -425,7 +425,11 @@ class SettingsWindow:
 
     def _load_data_async(self):
         """Fetch slow data (Ollama models, audio devices) in a background thread."""
-        self._ollama_pulled = _query_ollama_models()
+        uses_ollama = "ollama" in (
+            self.data.get("LLM_TEXT_PROVIDER", ""),
+            self.data.get("LLM_IMAGE_PROVIDER", ""),
+        )
+        self._ollama_pulled = _query_ollama_models() if uses_ollama else set()
         self._mic_choices = list_microphone_choices()
         self._spk_choices = list_speaker_choices()
         try:
