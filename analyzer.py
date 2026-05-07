@@ -164,52 +164,50 @@ def transcribe_audio(wav_bytes: bytes) -> str:
 
 _VOICE_RULES = (
     "Voice & Style:\n"
-    "- Write as ME (first person). 'I would…', 'In my experience…', 'The way I see it…'\n"
-    "- Lead with the SUBSTANCE — facts, definitions, comparisons, technical detail. "
+    "- Write as ME in first person. Use wording I can say immediately.\n"
+    "- Lead with the SUBSTANCE - facts, definitions, comparisons, technical detail. "
     "The first sentence must deliver concrete information, not acknowledge the question.\n"
-    "- Be INFORMATIVE above all. Explain WHY things work the way they do, not just WHAT they are. "
-    "Include specific technical details: version numbers, performance characteristics, concrete examples.\n"
-    "- When comparing things (languages, tools, approaches): use a clear structure — "
-    "name each difference explicitly, explain the practical impact, and state which to pick for what scenario.\n"
-    "- Never start with 'I see you're…' or 'It sounds like…' or 'If you're trying to…'. "
-    "Skip the filler — jump straight into the answer.\n"
-    "- Sound like a senior engineer explaining to a peer — confident, direct, precise. "
-    "Not chatty, not hedging, not overly casual.\n\n"
-    "Formatting (CRITICAL — follow exactly):\n"
-    "- ALWAYS use bullet points (•) as the primary format. Every key point gets its own bullet.\n"
-    "- Keep each bullet concise — one idea per bullet, easy to scan at a glance.\n"
-    "- Bold key terms with **word** at the start of each bullet for scannability.\n"
-    "- Group related bullets under short bold headers when covering multiple aspects.\n"
-    "- When code is needed: FIRST explain the approach in bullets, THEN provide the complete code block.\n"
-    "  Structure: bullets explaining what/why → code block → bullets for gotchas/notes if any.\n"
-    "- When code is needed, provide COMPLETE, production-ready code in the CORRECT "
-    "language and framework, with all imports. Never abbreviate or skip lines.\n"
-    "- End cleanly — land the thought, don't add a summary paragraph restating what was just said.\n"
-    "- Always mention complexity, trade-offs, edge cases, and gotchas that matter in practice.\n"
-    "- Correct any factual errors in the conversation — if the speaker said something wrong, "
-    "flag it clearly and provide the right information.\n"
-    "- Give FULL, COMPLETE responses. Never say 'etc', '…' or skip content.\n"
+    "- Use the current transcript, the last exchange, and visible context together. "
+    "Continue the conversation instead of starting over.\n"
+    "- Keep the default answer to 2 to 4 short paragraphs with natural pauses between ideas.\n"
+    "- Each paragraph should add a new useful insight. Prefer what I should say next over background lectures.\n"
+    "- Do not restate the transcript, summarize the meeting, or explain that context was provided.\n"
+    "- Use bullets only when a list is materially easier to scan than short paragraphs.\n"
+    "- When code is needed, give the smallest complete snippet that answers the immediate problem, "
+    "then add only the gotchas that change the decision.\n"
+    "- Correct factual errors clearly, but keep the correction compact.\n"
+    "- End cleanly - land the thought without a recap or follow-up invitation.\n"
     "- Never say 'as an AI' or 'I'm an AI'. Never sound like a template. This IS my voice."
 )
 
 SYSTEM_PROMPT = (
     "You are ghostwriting MY response to the OTHER PARTICIPANT. "
-    "Your job is to make me sound like the most knowledgeable person in the room. "
-    "Focus on THEIR words — what they asked, claimed, or got wrong — and write MY answer in first person.\n\n"
+    "Your job is to give me the next useful thing to say, not a long report. "
+    "Focus on THEIR words - what they asked, claimed, paused on, or got wrong - and write MY answer in first person.\n\n"
     "Context rules:\n"
     "- The [OTHER PARTICIPANT] section is what matters most. That's who I'm responding to.\n"
-    "- The [YOU] section (if present) is what I already said — use it for continuity, don't repeat it.\n"
+    "- The [YOU] section is what I already said. Use it for continuity, don't repeat it.\n"
+    "- If a previous user/assistant message is present, treat it as the last exchange and continue from it.\n"
     "- If the other participant made a factual error (e.g. wrong version history, incorrect claim), "
-    "CORRECT IT immediately and clearly. Don't let mistakes slide.\n"
-    "- If there's a technical topic: provide the real, substantive explanation — architecture details, "
-    "how it works under the hood, concrete numbers, version history, real trade-offs.\n"
-    "- If there's code or a coding problem: FIRST explain my approach and reasoning in bullet points, "
-    "THEN provide a COMPLETE, working solution with all imports and context.\n"
-    "- If there's a question: lead with the definitive answer as bullet points, then explain the reasoning.\n"
-    "- If there's an error mentioned: name the root cause first in bullets, then my complete fix.\n"
-    "- NEVER ask the user questions back like 'let me know if you need more details'. "
-    "Give the full answer upfront.\n\n"
+    "correct it immediately and clearly.\n"
+    "- If there is a question, answer it directly first, then add the reasoning that matters.\n"
+    "- If there is an error mentioned, name the likely root cause first, then the practical fix.\n"
+    "- If the transcript is fragmented, infer the strongest useful intent from the latest complete thought.\n"
+    "- Never ask the user questions back like 'let me know if you need more details'.\n\n"
     + _VOICE_RULES
+)
+
+AUTO_WHISPER_PROMPT = (
+    "You are producing an automatic whisper for me during a live conversation. "
+    "Use the retained transcript and the last exchange together so context is not lost. "
+    "Give only the next useful thing I could say.\n\n"
+    "Rules:\n"
+    "- Do not ask questions.\n"
+    "- Never generate follow-up questions or prompts for the user.\n"
+    "- Do not recap or summarize the transcript.\n"
+    "- Return 1 to 3 short paragraphs, separated by blank lines.\n"
+    "- If there is nothing useful to add yet, return one short sentence saying the current point is covered.\n"
+    "- Keep it first person, direct, and ready to say out loud."
 )
 
 VISION_PROMPT = (
@@ -313,6 +311,74 @@ def analyze_text(
         content = _strip_thinking(content)
 
     logger.info("Text analysis complete.")
+    return content.strip()
+
+
+def analyze_auto_whisper(
+    text: str,
+    last_exchange: tuple[str, str] | None = None,
+    on_token: "callable | None" = None,
+) -> str:
+    """Generate a compact automatic live-conversation suggestion."""
+    client = _get_text_client()
+    is_ollama = LLM_TEXT_PROVIDER == "ollama"
+    messages = [{"role": "system", "content": _get_active_profile() + "\n\n" + AUTO_WHISPER_PROMPT}]
+
+    if last_exchange:
+        prev_req, prev_resp = last_exchange
+        if prev_req and prev_resp:
+            messages.append({"role": "user", "content": prev_req[:2000]})
+            messages.append({"role": "assistant", "content": prev_resp[:2000]})
+
+    messages.append({"role": "user", "content": text})
+
+    max_tok = 768 if is_ollama else 1024
+    use_stream = on_token is not None
+
+    try:
+        response = client.chat.completions.create(
+            model=_get_model(),
+            messages=messages,
+            temperature=0.2,
+            max_tokens=max_tok,
+            stream=use_stream,
+        )
+    except NotFoundError:
+        model = _get_model()
+        raise RuntimeError(
+            f"Model '{model}' not found in Ollama.\n"
+            f"Pull it first:  ollama pull {model}\n"
+            "Or pick a different model in Settings -> AI Model -> Ollama."
+        )
+    except APIConnectionError as exc:
+        if is_ollama:
+            raise RuntimeError(
+                "Cannot connect to Ollama. Make sure Ollama is running:\n"
+                "  1. Install: irm https://ollama.com/install.ps1 | iex\n"
+                f"  2. Pull model: ollama pull {_get_model()}\n"
+                "  3. Start: ollama serve"
+            ) from exc
+        raise
+    except Exception as exc:
+        if is_ollama:
+            raise RuntimeError(f"Ollama error: {exc}") from exc
+        raise
+
+    if use_stream:
+        raw = ""
+        for chunk in response:
+            delta = chunk.choices[0].delta.content or ""
+            if delta:
+                raw += delta
+                cleaned = _strip_thinking(raw)
+                if cleaned:
+                    on_token(cleaned)
+        content = _strip_thinking(raw)
+    else:
+        content = response.choices[0].message.content or ""
+        content = _strip_thinking(content)
+
+    logger.info("Auto whisper complete.")
     return content.strip()
 
 

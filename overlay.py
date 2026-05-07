@@ -416,12 +416,15 @@ class OverlayApp:
         self.on_settings: callable = lambda: None
         self.on_clear_conversation: callable = lambda: None
         self.on_context_key_toggle: callable = lambda key, active: None
+        self.on_auto_whisper_toggle: callable = lambda enabled: None
 
         # Context keys state
         self._context_keys: dict[str, str] = {}
         self._active_keys: set[str] = set()
         self._context_frame: tk.Frame | None = None
         self._context_buttons: dict[str, tk.Button] = {}
+        self._auto_whisper_enabled = False
+        self._auto_whisper_btn: tk.Label | None = None
 
     # ═══════════════════════════════════════════════════════════════════
     #  Control Bar
@@ -502,6 +505,18 @@ class OverlayApp:
         audio_btn = self._bar_icon_btn(f, "🎙", _SUBTEXT, "Audio Analysis (Ctrl+D)")
         audio_btn.pack(side=tk.LEFT, padx=1)
         audio_btn.bind("<Button-1>", lambda _: self.on_audio())
+
+        # Auto Whisper runtime toggle
+        self._auto_whisper_btn = tk.Label(
+            f, text=" AW ",
+            bg=_CRUST, fg=_SUBTEXT,
+            font=(OVERLAY_FONT_FAMILY, 9), cursor="hand2",
+        )
+        self._auto_whisper_btn.pack(side=tk.LEFT, padx=1)
+        self._auto_whisper_btn.bind("<Button-1>", lambda _: self.toggle_auto_whisper())
+        self._auto_whisper_btn.bind("<Enter>", lambda _: self._auto_whisper_btn.config(bg=_SURFACE0))
+        self._auto_whisper_btn.bind("<Leave>", lambda _: self._refresh_auto_whisper_button())
+        _add_tooltip(self._auto_whisper_btn, "Auto Whisper")
 
         # Screenshot — camera icon
         screen_btn = self._bar_icon_btn(f, "📷", _SUBTEXT, "Screenshot Analysis (Ctrl+E)")
@@ -1373,6 +1388,22 @@ class OverlayApp:
     def set_status(self, text: str) -> None:
         self._status_label.config(text=f" {text} ")
         self.root.update_idletasks()
+
+    def _refresh_auto_whisper_button(self) -> None:
+        if not self._auto_whisper_btn:
+            return
+        self._auto_whisper_btn.config(
+            bg=_SURFACE0 if self._auto_whisper_enabled else _CRUST,
+            fg=_GREEN if self._auto_whisper_enabled else _SUBTEXT,
+        )
+
+    def set_auto_whisper_enabled(self, enabled: bool) -> None:
+        self._auto_whisper_enabled = enabled
+        self._refresh_auto_whisper_button()
+
+    def toggle_auto_whisper(self) -> None:
+        self.set_auto_whisper_enabled(not self._auto_whisper_enabled)
+        self.on_auto_whisper_toggle(self._auto_whisper_enabled)
 
     # ── Loading animation ──────────────────────────────────────────────────
 

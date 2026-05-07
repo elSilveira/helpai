@@ -17,7 +17,8 @@ import keyboard  # global hotkey library
 import pystray
 from PIL import Image, ImageDraw, ImageFont
 
-from analyzer import analyze_screenshot, analyze_text, analyze_transcript
+from analyzer import analyze_auto_whisper, analyze_screenshot, analyze_text, analyze_transcript
+from auto_whisper import AUTO_WHISPER_DEBOUNCE_SECONDS, AutoWhisperState, build_auto_whisper_request
 from audio_capture import ContinuousCapture, check_audio_available
 from config import (
     AUDIO_CAPTURE_ENABLED,
@@ -39,6 +40,7 @@ from local_transcriber import is_model_cached, preload_model
 from overlay import LoadingSplash, OverlayApp
 from screenshot import capture_full_screen
 from speech_to_text import describe_active_stt_provider, get_active_stt_provider, transcribe_audio_array
+from transcript_filters import format_transcript_paragraphs
 from visibility import exclude_from_taskbar
 
 # ── Logging ─────────────────────────────────────────────────────────────────
@@ -74,6 +76,11 @@ _tray_icon: "pystray.Icon | None" = None
 # ── Conversation context ────────────────────────────────────────────────────
 _last_request: str = ""           # last request text sent to AI
 _last_response: str = ""          # last AI response
+_auto_whisper_enabled: bool = False
+_auto_whisper_state = AutoWhisperState()
+_auto_whisper_timer: threading.Timer | None = None
+_auto_whisper_running: bool = False
+_auto_whisper_lock = threading.Lock()
 
 
 # ── System tray ─────────────────────────────────────────────────────────────
@@ -134,6 +141,76 @@ def _save_exchange(request_text: str, response_text: str) -> None:
     global _last_request, _last_response
     _last_request = request_text
     _last_response = response_text
+
+
+def _set_auto_whisper_enabled(enabled: bool) -> None:
+    """Enable/disable automatic non-destructive conversation whispers."""
+    global _auto_whisper_enabled, _auto_whisper_timer
+    with _auto_whisper_lock:
+        _auto_whisper_enabled = enabled
+        if not enabled and _auto_whisper_timer is not None:
+            _auto_whisper_timer.cancel()
+            _auto_whisper_timer = None
+    if app:
+        app.schedule(app.set_status, "Auto Whisper ON" if enabled else "Auto Whisper OFF")
+
+
+def _schedule_auto_whisper() -> None:
+    """Debounce auto whispering until transcript paragraphs settle briefly."""
+    global _auto_whisper_timer
+    if capture is None:
+        return
+    with _auto_whisper_lock:
+        if not _auto_whisper_enabled:
+            return
+        if _auto_whisper_timer is not None:
+            _auto_whisper_timer.cancel()
+        _auto_whisper_timer = threading.Timer(AUTO_WHISPER_DEBOUNCE_SECONDS, _run_auto_whisper)
+        _auto_whisper_timer.daemon = True
+        _auto_whisper_timer.start()
+
+
+def _run_auto_whisper() -> None:
+    """Read retained transcript and generate a compact suggestion if it changed."""
+    global _auto_whisper_timer, _auto_whisper_running
+    if capture is None or app is None:
+        return
+
+    with _auto_whisper_lock:
+        _auto_whisper_timer = None
+        if not _auto_whisper_enabled or _auto_whisper_running:
+            return
+        _auto_whisper_running = True
+
+    loading_started = False
+    try:
+        input_text, output_text = _auto_whisper_state.snapshot_from_capture(capture)
+        if not _auto_whisper_state.mark_if_changed(input_text, output_text):
+            return
+
+        request_text = build_auto_whisper_request(input_text, output_text)
+        loading_started = True
+        app.schedule(app.begin_loading, "Auto Whisper")
+        app.schedule(app.set_status, "Auto whispering...")
+        result = analyze_auto_whisper(
+            request_text,
+            last_exchange=_get_last_exchange(),
+            on_token=lambda t: app.schedule(app.set_insight, t),
+        )
+        _save_exchange(request_text, result)
+        app.schedule(app.set_insight, result)
+    except Exception as exc:
+        logger.exception("Auto whisper error")
+        app.schedule(app.set_insight, f"Auto Whisper error: {exc}")
+    finally:
+        with _auto_whisper_lock:
+            _auto_whisper_running = False
+        if loading_started:
+            app.schedule(app.end_loading)
+        if _auto_whisper_enabled:
+            app.schedule(app.set_status, "Auto Whisper ON")
+        else:
+            app.schedule(app.set_status, "Listening...")
 
 
 def _action_audio_analysis() -> None:
@@ -321,10 +398,7 @@ _last_transcript_text: str = ""
 
 def _format_paragraphs(raw: str) -> str:
     """Format transcript lines into flowing text, joining segments naturally."""
-    segments = [segment.strip() for segment in raw.strip().split("\n") if segment.strip()]
-    if not segments:
-        return ""
-    return " ".join(segments)
+    return format_transcript_paragraphs(raw)
 
 
 def _on_transcript_update(input_text: str, output_text: str) -> None:
@@ -346,6 +420,7 @@ def _on_transcript_update(input_text: str, output_text: str) -> None:
     _last_transcript_text = new_text
     app.schedule(app.set_conversation, new_text)
     app.schedule(app.set_status, "Transcribing…")
+    _schedule_auto_whisper()
 
 
 def _refresh_audio_levels() -> None:
@@ -661,6 +736,7 @@ def main() -> None:
     app.on_quit = _quit_app
     app.on_settings = _open_settings
     app.on_clear_conversation = _clear_transcript
+    app.on_auto_whisper_toggle = _set_auto_whisper_enabled
     app.set_status(audio_status if capture else "Ready")
     app.root.after(0, _refresh_audio_levels)
 

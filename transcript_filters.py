@@ -58,6 +58,13 @@ def normalize_transcript_text(text: str) -> str:
     return re.sub(r"\s+", " ", normalized).strip()
 
 
+def format_transcript_paragraphs(text: str) -> str:
+    """Format committed transcript utterances as readable paragraphs."""
+    paragraphs = [normalize_transcript_text(part) for part in text.splitlines()]
+    paragraphs = [part for part in paragraphs if part]
+    return "\n\n".join(paragraphs)
+
+
 def is_hallucination(text: str) -> bool:
     """Return True when a transcript is a known silence artifact."""
     candidate = text.strip()

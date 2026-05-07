@@ -42,6 +42,7 @@ helpai = "helpai:main"
 py-modules = [
     "analyzer",
     "audio_capture",
+    "auto_whisper",
     "config",
     "create_shortcut",
     "helpai",
