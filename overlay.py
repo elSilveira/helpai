@@ -11,7 +11,9 @@ All windows are excluded from screen-capture APIs (WDA_EXCLUDEFROMCAPTURE).
 """
 
 import logging
+import re
 import tkinter as tk
+from dataclasses import dataclass
 from tkinter import scrolledtext
 
 from config import (
@@ -63,6 +65,33 @@ _BTN_STYLE = dict(
     pady=2,
     bd=0,
 )
+
+
+@dataclass(frozen=True)
+class InsightContent:
+    insights: str
+    code: str
+
+    @property
+    def has_code(self) -> bool:
+        return bool(self.code.strip())
+
+
+_FENCED_CODE_RE = re.compile(r"```[^\n`]*\n?(.*?)(?:```|$)", re.DOTALL)
+
+
+def split_insight_content(text: str) -> InsightContent:
+    """Split fenced code blocks from explanatory insight text."""
+    code_blocks: list[str] = []
+
+    def _replace(match: re.Match[str]) -> str:
+        code_blocks.append(match.group(1).strip())
+        return "\n\n"
+
+    insights = _FENCED_CODE_RE.sub(_replace, text)
+    insights = re.sub(r"\n{3,}", "\n\n", insights).strip()
+    code = "\n\n".join(block for block in code_blocks if block)
+    return InsightContent(insights=insights, code=code)
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -385,9 +414,18 @@ class OverlayApp:
         self._insight_visible = False
         self._saved_insight_geo: str | None = None
         self._insight_text: scrolledtext.ScrolledText | None = None
+        self._insight_raw_text = ""
         self._insight_size_locked = False  # True after first auto-expand
         self._insight_user_scrolled = False  # True when user scrolls manually
         self._insight_last_len = 0  # track streaming (content growing)
+
+        # ── Code Panel ───────────────────────────────────────────────
+        self._code_panel: tk.Toplevel | None = None
+        self._code_visible = False
+        self._saved_code_geo: str | None = None
+        self._code_text: scrolledtext.ScrolledText | None = None
+        self._code_user_scrolled = False
+        self._code_size_locked = False
 
         # ── Settings Panel ─────────────────────────────────────────────
         self._settings_panel: tk.Toplevel | None = None
@@ -1037,6 +1075,98 @@ class OverlayApp:
     #  Settings Panel — delegates to settings_ui.SettingsWindow
     # ═══════════════════════════════════════════════════════════════════
 
+    def _ensure_code_panel(self) -> None:
+        if self._code_panel and self._code_panel.winfo_exists():
+            return
+        screen_w = self.root.winfo_screenwidth()
+        insight_x = (screen_w - OVERLAY_WIDTH) // 2
+        code_x = min(insight_x + OVERLAY_WIDTH + 12, max(10, screen_w - OVERLAY_WIDTH - 10))
+        panel, text_w, close_w, _ = self._create_panel(
+            "Code", _TEAL,
+            pos_x=code_x, pos_y=40, clear_btn=False,
+        )
+        text_w.config(wrap=tk.NONE, font=("Consolas", OVERLAY_FONT_SIZE))
+        self._code_panel = panel
+        self._code_text = text_w
+        self._code_visible = False
+        self._code_user_scrolled = False
+        self._code_size_locked = False
+        close_w.bind("<Button-1>", lambda _: self.toggle_code())
+        text_w.bind("<MouseWheel>", self._on_code_scroll)
+        text_w.bind("<Button-4>", self._on_code_scroll)
+        text_w.bind("<Button-5>", self._on_code_scroll)
+
+    def toggle_code(self) -> None:
+        self._ensure_code_panel()
+        if self._code_visible:
+            self._code_panel.withdraw()
+            self._code_visible = False
+        else:
+            self._code_panel.deiconify()
+            self._code_panel.lift()
+            self._code_panel.attributes("-topmost", True)
+            self._code_panel.after(50, lambda: _apply_exclusion(self._code_panel))
+            self._code_visible = True
+        self.root.lift()
+
+    def _show_code_panel(self) -> None:
+        self._ensure_code_panel()
+        if not self._code_visible:
+            self._code_panel.deiconify()
+            self._code_visible = True
+        self._code_panel.lift()
+        self._code_panel.attributes("-topmost", True)
+        self._code_panel.after(50, lambda: _apply_exclusion(self._code_panel))
+
+    def _hide_code_panel(self) -> None:
+        if self._panel_alive(self._code_panel) and self._code_visible:
+            self._code_panel.withdraw()
+            self._code_visible = False
+
+    def _is_code_near_bottom(self) -> bool:
+        try:
+            return self._code_text.yview()[1] >= 0.95 if self._code_text else True
+        except Exception:
+            return True
+
+    def _on_code_scroll(self, *_args):
+        self._code_user_scrolled = not self._is_code_near_bottom()
+
+    def _set_code(self, code: str, *, is_streaming: bool) -> None:
+        if not code.strip():
+            self._hide_code_panel()
+            return
+        self._show_code_panel()
+        if self._code_text is None:
+            return
+        self._write_text_widget(
+            self._code_text,
+            code,
+            user_scrolled=self._code_user_scrolled,
+        )
+        if not is_streaming:
+            self._code_text.see("1.0")
+        self._auto_expand_code()
+
+    def _auto_expand_code(self) -> None:
+        if self._code_size_locked:
+            return
+        if not self._code_panel or not self._code_text:
+            return
+        self._code_panel.update_idletasks()
+        line_count = int(self._code_text.index("end-1c").split(".")[0])
+        line_px = int(OVERLAY_FONT_SIZE * 1.8)
+        needed_h = 40 + OVERLAY_PADDING * 2 + (line_count * line_px)
+        screen_h = self._code_panel.winfo_screenheight()
+        max_h = int(screen_h * 0.80)
+        current_h = self._code_panel.winfo_height()
+        new_h = max(current_h, OVERLAY_HEIGHT, min(needed_h, max_h))
+        cur_w = self._code_panel.winfo_width()
+        cur_x = self._code_panel.winfo_x()
+        cur_y = self._code_panel.winfo_y()
+        self._code_panel.geometry(f"{cur_w}x{new_h}+{cur_x}+{cur_y}")
+        self._code_size_locked = True
+
     def toggle_settings(self) -> None:
         """Open/close the shared settings window."""
         if self._settings_panel and self._settings_panel.winfo_exists():
@@ -1131,7 +1261,7 @@ class OverlayApp:
         text_w.config(state=tk.DISABLED)
 
     def get_selection(self) -> str | None:
-        for tw in (self._insight_text, self._conv_text):
+        for tw in (self._insight_text, self._code_text, self._conv_text):
             if tw is None:
                 continue
             try:
@@ -1481,50 +1611,49 @@ class OverlayApp:
         if self._insight_text is None:
             return
 
+        self._insight_raw_text = text
+        content = split_insight_content(text)
         new_len = len(text)
         is_streaming = new_len > self._insight_last_len and self._insight_last_len > 0
         self._insight_last_len = new_len
 
-        if is_streaming:
-            # Delta-append: only insert new characters, scroll stays untouched
-            current = self._insight_text.get("1.0", "end-1c")
-            if text.startswith(current):
-                # Monotonic growth — just append the tail
-                delta = text[len(current):]
-                if delta:
-                    self._insight_text.config(state=tk.NORMAL)
-                    self._insight_text.insert(tk.END, delta)
-                    self._insight_text.config(state=tk.DISABLED)
-            else:
-                # Content changed shape (e.g. thinking tags stripped) — full replace
-                ypos = self._insight_text.yview()
-                self._insight_text.config(state=tk.NORMAL)
-                self._insight_text.delete("1.0", tk.END)
-                self._insight_text.insert(tk.END, text)
-                self._insight_text.config(state=tk.DISABLED)
-                self._insight_text.yview_moveto(ypos[0])
-        else:
-            # Brand new content: full replace, scroll to top
-            self._insight_text.config(state=tk.NORMAL)
-            self._insight_text.delete("1.0", tk.END)
-            self._insight_text.insert(tk.END, text)
-            self._insight_text.config(state=tk.DISABLED)
+        self._write_text_widget(
+            self._insight_text,
+            content.insights or text,
+            user_scrolled=self._insight_user_scrolled,
+        )
+        self._set_code(content.code, is_streaming=is_streaming)
+
+        if not is_streaming:
             self._insight_text.see("1.0")
             self._insight_last_len = new_len
 
         self._auto_expand_insight()
         logger.debug("Insight panel updated (%d chars).", len(text))
 
+    def _write_text_widget(
+        self,
+        widget: scrolledtext.ScrolledText,
+        text: str,
+        *,
+        user_scrolled: bool,
+    ) -> None:
+        ypos = widget.yview() if user_scrolled else None
+        widget.config(state=tk.NORMAL)
+        widget.delete("1.0", tk.END)
+        widget.insert(tk.END, text)
+        widget.config(state=tk.DISABLED)
+        if ypos is not None:
+            widget.yview_moveto(ypos[0])
+        elif not user_scrolled:
+            widget.see(tk.END)
+
     def set_content(self, text: str) -> None:
         self.set_insight(text)
 
     def append_content(self, text: str) -> None:
-        self._ensure_insight_panel()
-        if not self._insight_visible:
-            self.toggle_insight()
-        self._insight_text.config(state=tk.NORMAL)
-        self._insight_text.insert(tk.END, "\n" + text)
-        self._insight_text.config(state=tk.DISABLED)
+        current = self._insight_raw_text
+        self.set_insight(f"{current}\n{text}" if current else text)
 
     def _auto_expand_insight(self) -> None:
         """Expand the insight panel height on first show only; never move it after."""
@@ -1561,6 +1690,7 @@ class OverlayApp:
         for panel, visible, saved_geo in [
             (self._conv_panel, self._conv_visible, self._saved_conv_geo),
             (self._insight_panel, self._insight_visible, self._saved_insight_geo),
+            (self._code_panel, self._code_visible, self._saved_code_geo),
             (self._settings_panel, self._settings_visible, self._saved_settings_geo),
         ]:
             if self._panel_alive(panel) and visible:
@@ -1594,6 +1724,12 @@ class OverlayApp:
             except Exception:
                 pass
             self._insight_panel.withdraw()
+        if self._panel_alive(self._code_panel) and self._code_visible:
+            try:
+                self._saved_code_geo = self._code_panel.geometry()
+            except Exception:
+                pass
+            self._code_panel.withdraw()
         if self._panel_alive(self._settings_panel) and self._settings_visible:
             try:
                 self._saved_settings_geo = self._settings_panel.geometry()
