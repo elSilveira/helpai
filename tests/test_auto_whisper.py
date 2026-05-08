@@ -58,6 +58,7 @@ class AutoWhisperTests(unittest.TestCase):
         self.assertIn("Do not ask questions", prompt)
         self.assertIn("Never generate follow-up questions", prompt)
         self.assertIn("1 to 3 short paragraphs", prompt)
+        self.assertIn("prior responses", prompt)
 
 
 if __name__ == "__main__":

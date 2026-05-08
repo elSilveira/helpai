@@ -19,6 +19,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from analyzer import analyze_auto_whisper, analyze_screenshot, analyze_text, analyze_transcript
 from auto_whisper import AUTO_WHISPER_DEBOUNCE_SECONDS, AutoWhisperState, build_auto_whisper_request
+from context_memory import ContextMemory
 from audio_capture import ContinuousCapture, check_audio_available
 from config import (
     AUDIO_CAPTURE_ENABLED,
@@ -74,8 +75,7 @@ capture: ContinuousCapture | None = None
 _tray_icon: "pystray.Icon | None" = None
 
 # ── Conversation context ────────────────────────────────────────────────────
-_last_request: str = ""           # last request text sent to AI
-_last_response: str = ""          # last AI response
+_context_memory = ContextMemory(max_entries=6, max_chars=7000)
 _auto_whisper_enabled: bool = False
 _auto_whisper_state = AutoWhisperState()
 _auto_whisper_timer: threading.Timer | None = None
@@ -132,15 +132,16 @@ def _start_tray() -> None:
 
 def _get_last_exchange() -> tuple[str, str] | None:
     """Return last (request, response) pair, or None if empty."""
-    if _last_request and _last_response:
-        return (_last_request, _last_response)
-    return None
+    return _context_memory.latest_exchange()
 
-def _save_exchange(request_text: str, response_text: str) -> None:
-    """Store last exchange for continuity (no extra API call)."""
-    global _last_request, _last_response
-    _last_request = request_text
-    _last_response = response_text
+def _get_recent_context() -> str:
+    """Return bounded recent context for continuity across automatic analysis."""
+    return _context_memory.build_context_block()
+
+
+def _save_exchange(request_text: str, response_text: str, kind: str = "conversation") -> None:
+    """Store a bounded exchange for continuity (no extra API call)."""
+    _context_memory.add(kind, request_text, response_text)
 
 
 def _set_auto_whisper_enabled(enabled: bool) -> None:
@@ -195,9 +196,10 @@ def _run_auto_whisper() -> None:
         result = analyze_auto_whisper(
             request_text,
             last_exchange=_get_last_exchange(),
+            recent_context=_get_recent_context(),
             on_token=lambda t: app.schedule(app.set_insight, t),
         )
-        _save_exchange(request_text, result)
+        _save_exchange(request_text, result, kind="auto_whisper")
         app.schedule(app.set_insight, result)
     except Exception as exc:
         logger.exception("Auto whisper error")
@@ -241,7 +243,7 @@ def _action_audio_analysis() -> None:
                 last_exchange=_get_last_exchange(),
                 on_token=lambda t: app.schedule(app.set_insight, t),
             )
-            _save_exchange(selected.strip(), result)
+            _save_exchange(selected.strip(), result, kind="selection")
             app.schedule(app.set_insight, result)
         except Exception as exc:
             logger.exception("Selection analysis error")
@@ -280,7 +282,7 @@ def _action_audio_analysis() -> None:
             combined_req += f"[OTHER PARTICIPANT]:\n{output_text.strip()}\n\n"
         if input_text.strip():
             combined_req += f"[YOU]:\n{input_text.strip()}"
-        _save_exchange(combined_req, result)
+        _save_exchange(combined_req, result, kind="audio")
         app.schedule(app.set_insight, result)
     except Exception as exc:
         logger.exception("Audio analysis error")
@@ -330,8 +332,10 @@ def _action_screenshot_feedback() -> None:
 
         result = analyze_screenshot(
             png,
+            recent_context=_get_recent_context(),
             on_token=lambda t: app.schedule(app.set_insight, t),
         )
+        _save_exchange("Screenshot feedback request", result, kind="screenshot")
         app.schedule(app.set_insight, result)
     except Exception as exc:
         logger.exception("Screenshot analysis error")
@@ -364,7 +368,7 @@ def _action_quick_input_submit(text: str) -> None:
                 last_exchange=_get_last_exchange(),
                 on_token=lambda t: app.schedule(app.set_insight, t),
             )
-            _save_exchange(text, result)
+            _save_exchange(text, result, kind="quick_input")
             app.schedule(app.set_insight, result)
         except Exception as exc:
             logger.exception("Quick-input analysis error")

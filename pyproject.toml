@@ -44,6 +44,7 @@ py-modules = [
     "audio_capture",
     "auto_whisper",
     "config",
+    "context_memory",
     "create_shortcut",
     "helpai",
     "helpai_version",

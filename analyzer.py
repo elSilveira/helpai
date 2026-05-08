@@ -199,7 +199,7 @@ SYSTEM_PROMPT = (
 
 AUTO_WHISPER_PROMPT = (
     "You are producing an automatic whisper for me during a live conversation. "
-    "Use the retained transcript and the last exchange together so context is not lost. "
+    "Use the retained transcript, prior responses, and the last exchange together so context is not lost. "
     "Give only the next useful thing I could say.\n\n"
     "Rules:\n"
     "- Do not ask questions.\n"
@@ -317,6 +317,7 @@ def analyze_text(
 def analyze_auto_whisper(
     text: str,
     last_exchange: tuple[str, str] | None = None,
+    recent_context: str | None = None,
     on_token: "callable | None" = None,
 ) -> str:
     """Generate a compact automatic live-conversation suggestion."""
@@ -329,6 +330,9 @@ def analyze_auto_whisper(
         if prev_req and prev_resp:
             messages.append({"role": "user", "content": prev_req[:2000]})
             messages.append({"role": "assistant", "content": prev_resp[:2000]})
+
+    if recent_context:
+        messages.append({"role": "system", "content": recent_context[:6000]})
 
     messages.append({"role": "user", "content": text})
 
@@ -385,11 +389,26 @@ def analyze_auto_whisper(
 # ── Screenshot → Insights ───────────────────────────────────────────────────
 
 
-def analyze_screenshot(image_bytes: bytes, on_token: "callable | None" = None) -> str:
+def analyze_screenshot(
+    image_bytes: bytes,
+    on_token: "callable | None" = None,
+    recent_context: str | None = None,
+) -> str:
     """Send a screenshot to the vision model and return insights."""
     client = _get_image_client()
     views = prepare_vision_views(image_bytes)
     content: list[dict] = [{"type": "text", "text": VISION_PROMPT}]
+    if recent_context:
+        content.append(
+            {
+                "type": "text",
+                "text": (
+                    "Previous screenshot/conversation context. Use it only if it is related "
+                    "to the current screen; ignore it if the screen has moved to a different task.\n\n"
+                    + recent_context[:6000]
+                ),
+            }
+        )
 
     if len(views) > 1:
         content.append(
