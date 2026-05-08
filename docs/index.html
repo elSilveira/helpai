@@ -1,0 +1,728 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="HelpAI is a free open-source Windows overlay for local AI assistance, QA sessions, training, screenshots, audio transcription, and coding help."
+    />
+    <meta name="theme-color" content="#10131f" />
+    <title>HelpAI - Free Open Source AI Overlay</title>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <style>
+      :root {
+        --bg: #10131f;
+        --panel: #171b2a;
+        --panel-2: #1f2536;
+        --line: #31384d;
+        --text: #eef3f8;
+        --muted: #9da8ba;
+        --soft: #c7d0dd;
+        --blue: #78a8ff;
+        --cyan: #55d6d2;
+        --green: #7be38a;
+        --gold: #ffd166;
+        --rose: #ff7a90;
+        --shadow: 0 24px 80px rgba(0, 0, 0, 0.35);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background:
+          radial-gradient(circle at 18% 8%, rgba(85, 214, 210, 0.16), transparent 30%),
+          radial-gradient(circle at 80% 18%, rgba(120, 168, 255, 0.14), transparent 30%),
+          linear-gradient(180deg, #10131f 0%, #111724 48%, #0d111b 100%);
+        color: var(--text);
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+          sans-serif;
+        line-height: 1.5;
+      }
+
+      a {
+        color: inherit;
+        text-decoration: none;
+      }
+
+      .shell {
+        width: min(1180px, calc(100% - 40px));
+        margin: 0 auto;
+      }
+
+      .nav {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 22px 0;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-weight: 800;
+        letter-spacing: 0;
+      }
+
+      .mark {
+        width: 36px;
+        height: 36px;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 8px;
+        display: grid;
+        place-items: center;
+        background: linear-gradient(135deg, rgba(85, 214, 210, 0.28), rgba(120, 168, 255, 0.18));
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16);
+      }
+
+      .nav-links {
+        display: flex;
+        align-items: center;
+        gap: 20px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      .nav-links a:hover {
+        color: var(--text);
+      }
+
+      .hero {
+        min-height: calc(100vh - 84px);
+        display: grid;
+        grid-template-columns: minmax(0, 0.94fr) minmax(420px, 1.06fr);
+        gap: 52px;
+        align-items: center;
+        padding: 26px 0 76px;
+      }
+
+      .eyebrow {
+        display: inline-flex;
+        gap: 8px;
+        align-items: center;
+        padding: 7px 10px;
+        border: 1px solid rgba(123, 227, 138, 0.28);
+        background: rgba(123, 227, 138, 0.08);
+        border-radius: 999px;
+        color: #c8ffd0;
+        font-weight: 700;
+        font-size: 13px;
+      }
+
+      .hero h1 {
+        margin: 22px 0 18px;
+        font-size: clamp(44px, 6vw, 82px);
+        line-height: 0.95;
+        letter-spacing: 0;
+      }
+
+      .hero-copy {
+        max-width: 680px;
+        color: var(--soft);
+        font-size: 19px;
+      }
+
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin: 30px 0 24px;
+      }
+
+      .button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 46px;
+        padding: 0 18px;
+        border-radius: 8px;
+        font-weight: 800;
+        border: 1px solid transparent;
+      }
+
+      .button.primary {
+        color: #07111a;
+        background: linear-gradient(135deg, var(--green), var(--cyan));
+      }
+
+      .button.secondary {
+        color: var(--text);
+        border-color: rgba(255, 255, 255, 0.18);
+        background: rgba(255, 255, 255, 0.06);
+      }
+
+      .proof-row {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+        margin-top: 26px;
+      }
+
+      .proof {
+        padding: 12px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        background: rgba(255, 255, 255, 0.045);
+        border-radius: 8px;
+      }
+
+      .proof strong {
+        display: block;
+        color: var(--text);
+        font-size: 14px;
+      }
+
+      .proof span {
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .preview-wrap {
+        position: relative;
+        min-height: 560px;
+      }
+
+      .desktop-frame {
+        position: absolute;
+        inset: 0 0 24px 0;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        background:
+          linear-gradient(135deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02)),
+          #0b0f18;
+        border-radius: 8px;
+        box-shadow: var(--shadow);
+        overflow: hidden;
+      }
+
+      .wallpaper {
+        position: absolute;
+        inset: 0;
+        background:
+          linear-gradient(120deg, rgba(85, 214, 210, 0.12), transparent 38%),
+          linear-gradient(300deg, rgba(255, 209, 102, 0.12), transparent 36%),
+          repeating-linear-gradient(90deg, rgba(255, 255, 255, 0.03) 0 1px, transparent 1px 64px),
+          repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.02) 0 1px, transparent 1px 64px);
+      }
+
+      .overlay-bar {
+        position: absolute;
+        left: 50%;
+        bottom: 28px;
+        transform: translateX(-50%);
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        padding: 7px 10px;
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        background: rgba(17, 20, 31, 0.94);
+        border-radius: 8px;
+        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.34);
+      }
+
+      .bar-dot {
+        width: 24px;
+        height: 24px;
+        border-radius: 6px;
+        display: grid;
+        place-items: center;
+        color: #0b1119;
+        font-size: 12px;
+        font-weight: 900;
+      }
+
+      .bar-dot.green { background: var(--green); }
+      .bar-dot.blue { background: var(--blue); }
+      .bar-dot.cyan { background: var(--cyan); }
+
+      .panel {
+        position: absolute;
+        width: 49%;
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        background: rgba(23, 27, 42, 0.92);
+        border-radius: 8px;
+        overflow: hidden;
+        box-shadow: 0 18px 46px rgba(0, 0, 0, 0.34);
+        backdrop-filter: blur(12px);
+      }
+
+      .panel.conversation {
+        left: 22px;
+        top: 34px;
+        height: 238px;
+      }
+
+      .panel.insights {
+        right: 22px;
+        top: 58px;
+        height: 260px;
+      }
+
+      .panel.code {
+        right: 78px;
+        bottom: 104px;
+        width: 53%;
+        height: 198px;
+      }
+
+      .panel-title {
+        height: 31px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 0 11px;
+        background: rgba(9, 12, 19, 0.7);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.09);
+        color: var(--soft);
+        font-size: 12px;
+        font-weight: 800;
+      }
+
+      .pip {
+        width: 7px;
+        height: 18px;
+        border-radius: 4px;
+        background: var(--blue);
+      }
+
+      .conversation .pip { background: var(--green); }
+      .code .pip { background: var(--cyan); }
+
+      .panel-body {
+        padding: 13px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .line {
+        height: 8px;
+        margin: 9px 0;
+        border-radius: 8px;
+        background: rgba(255, 255, 255, 0.1);
+      }
+
+      .line.short { width: 54%; }
+      .line.mid { width: 74%; }
+      .line.long { width: 92%; }
+
+      .speaker {
+        color: var(--green);
+        font-weight: 800;
+        margin-top: 2px;
+      }
+
+      .insight-text {
+        color: var(--soft);
+        margin-bottom: 11px;
+      }
+
+      .codeblock {
+        font-family: "Cascadia Mono", Consolas, ui-monospace, monospace;
+        color: #d7fbe0;
+        background: rgba(2, 7, 13, 0.74);
+        border: 1px solid rgba(85, 214, 210, 0.18);
+        border-radius: 8px;
+        padding: 11px;
+        font-size: 11px;
+        line-height: 1.55;
+      }
+
+      .token-a { color: #78a8ff; }
+      .token-b { color: #ffd166; }
+      .token-c { color: #7be38a; }
+
+      section {
+        padding: 76px 0;
+      }
+
+      .section-head {
+        max-width: 760px;
+        margin-bottom: 28px;
+      }
+
+      .section-head h2 {
+        margin: 0 0 12px;
+        font-size: clamp(30px, 4vw, 48px);
+        line-height: 1.05;
+        letter-spacing: 0;
+      }
+
+      .section-head p {
+        margin: 0;
+        color: var(--muted);
+        font-size: 17px;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 16px;
+      }
+
+      .card {
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        background: rgba(255, 255, 255, 0.045);
+        border-radius: 8px;
+        padding: 22px;
+      }
+
+      .card h3 {
+        margin: 0 0 9px;
+        font-size: 18px;
+      }
+
+      .card p {
+        margin: 0;
+        color: var(--muted);
+      }
+
+      .privacy-band {
+        display: grid;
+        grid-template-columns: 0.9fr 1.1fr;
+        gap: 28px;
+        align-items: stretch;
+        border: 1px solid rgba(123, 227, 138, 0.18);
+        background:
+          linear-gradient(135deg, rgba(123, 227, 138, 0.1), rgba(85, 214, 210, 0.06)),
+          rgba(255, 255, 255, 0.04);
+        border-radius: 8px;
+        padding: 28px;
+      }
+
+      .split-list {
+        display: grid;
+        gap: 12px;
+      }
+
+      .check {
+        display: flex;
+        gap: 10px;
+        align-items: flex-start;
+        color: var(--soft);
+      }
+
+      .check i {
+        display: grid;
+        place-items: center;
+        width: 22px;
+        height: 22px;
+        flex: 0 0 22px;
+        border-radius: 999px;
+        color: #07111a;
+        background: var(--green);
+        font-style: normal;
+        font-weight: 900;
+        font-size: 13px;
+      }
+
+      .steps {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 14px;
+      }
+
+      .step-num {
+        color: var(--cyan);
+        font-weight: 900;
+        font-size: 13px;
+      }
+
+      .command {
+        margin-top: 12px;
+        padding: 11px;
+        border-radius: 8px;
+        background: #070b12;
+        color: #d7fbe0;
+        font-family: "Cascadia Mono", Consolas, ui-monospace, monospace;
+        font-size: 12px;
+        overflow-wrap: anywhere;
+      }
+
+      .cta {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 24px;
+        align-items: center;
+        padding: 34px;
+        border-radius: 8px;
+        border: 1px solid rgba(120, 168, 255, 0.2);
+        background:
+          linear-gradient(135deg, rgba(120, 168, 255, 0.13), rgba(85, 214, 210, 0.08)),
+          rgba(255, 255, 255, 0.04);
+      }
+
+      .cta h2 {
+        margin: 0 0 8px;
+        font-size: clamp(28px, 4vw, 44px);
+      }
+
+      .cta p {
+        margin: 0;
+        color: var(--muted);
+      }
+
+      footer {
+        padding: 34px 0 44px;
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      @media (max-width: 940px) {
+        .hero {
+          grid-template-columns: 1fr;
+          gap: 28px;
+        }
+
+        .preview-wrap {
+          min-height: 520px;
+        }
+
+        .grid,
+        .steps,
+        .privacy-band,
+        .cta {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 620px) {
+        .shell {
+          width: min(100% - 24px, 1180px);
+        }
+
+        .nav {
+          align-items: flex-start;
+          gap: 14px;
+        }
+
+        .nav-links {
+          display: none;
+        }
+
+        .hero {
+          min-height: auto;
+          padding-top: 12px;
+        }
+
+        .proof-row {
+          grid-template-columns: 1fr;
+        }
+
+        .preview-wrap {
+          min-height: 620px;
+        }
+
+        .panel {
+          width: calc(100% - 28px);
+          left: 14px;
+          right: auto;
+        }
+
+        .panel.conversation {
+          top: 22px;
+        }
+
+        .panel.insights {
+          top: 278px;
+        }
+
+        .panel.code {
+          width: calc(100% - 28px);
+          left: 14px;
+          right: auto;
+          bottom: 82px;
+        }
+
+        .actions {
+          flex-direction: column;
+        }
+
+        .button {
+          width: 100%;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script>
+      const h = React.createElement;
+      const repoUrl = "https://github.com/elSilveira/helpai";
+
+      function Nav() {
+        return h("header", { className: "shell nav" },
+          h("a", { className: "brand", href: "#" },
+            h("span", { className: "mark" }, "H"),
+            h("span", null, "HelpAI")
+          ),
+          h("nav", { className: "nav-links", "aria-label": "Primary" },
+            h("a", { href: "#features" }, "Features"),
+            h("a", { href: "#privacy" }, "Privacy"),
+            h("a", { href: "#setup" }, "Setup"),
+            h("a", { href: repoUrl }, "GitHub")
+          )
+        );
+      }
+
+      function ProductPreview() {
+        return h("div", { className: "preview-wrap", "aria-label": "HelpAI overlay preview" },
+          h("div", { className: "desktop-frame" },
+            h("div", { className: "wallpaper" }),
+            h("div", { className: "panel conversation" },
+              h("div", { className: "panel-title" }, h("span", { className: "pip" }), "Conversation"),
+              h("div", { className: "panel-body" },
+                h("div", { className: "speaker" }, "THEM"),
+                h("div", { className: "line long" }),
+                h("div", { className: "line mid" }),
+                h("div", { className: "speaker" }, "YOU"),
+                h("div", { className: "line long" }),
+                h("div", { className: "line short" })
+              )
+            ),
+            h("div", { className: "panel insights" },
+              h("div", { className: "panel-title" }, h("span", { className: "pip" }), "Insights"),
+              h("div", { className: "panel-body" },
+                h("p", { className: "insight-text" }, "Explain the approach first, then show the fix, then call out why it works."),
+                h("div", { className: "line long" }),
+                h("div", { className: "line mid" }),
+                h("div", { className: "line short" })
+              )
+            ),
+            h("div", { className: "panel code" },
+              h("div", { className: "panel-title" }, h("span", { className: "pip" }), "Code"),
+              h("div", { className: "panel-body" },
+                h("pre", { className: "codeblock" },
+                  h("span", { className: "token-a" }, "def "), "answer():\n",
+                  "    ", h("span", { className: "token-b" }, "return "), h("span", { className: "token-c" }, "\"ship the clear fix\"")
+                )
+              )
+            ),
+            h("div", { className: "overlay-bar" },
+              h("span", { className: "bar-dot green" }, "C"),
+              h("span", { className: "bar-dot blue" }, "I"),
+              h("span", { className: "bar-dot cyan" }, "</>"),
+              h("span", { style: { color: "#9da8ba", fontSize: "12px", padding: "0 4px" } }, "Ready")
+            )
+          )
+        );
+      }
+
+      function Hero() {
+        return h("main", { className: "shell hero" },
+          h("div", null,
+            h("span", { className: "eyebrow" }, "Free, open source, local-first"),
+            h("h1", null, "A quiet AI overlay for live work."),
+            h("p", { className: "hero-copy" },
+              "HelpAI sits on top of Windows, listens when you ask, reads screenshots when you need context, and keeps explanations separate from code so you can stay in the conversation."
+            ),
+            h("div", { className: "actions" },
+              h("a", { className: "button primary", href: repoUrl }, "View on GitHub"),
+              h("a", { className: "button secondary", href: "#setup" }, "Run locally")
+            ),
+            h("div", { className: "proof-row" },
+              h("div", { className: "proof" }, h("strong", null, "Free to use"), h("span", null, "No app subscription or license server")),
+              h("div", { className: "proof" }, h("strong", null, "Open source"), h("span", null, "Public code, auditable behavior")),
+              h("div", { className: "proof" }, h("strong", null, "No telemetry"), h("span", null, "No tracking or analytics scripts"))
+            )
+          ),
+          h(ProductPreview)
+        );
+      }
+
+      function FeatureGrid() {
+        const features = [
+          ["Live conversation context", "Keep the transcript visible while HelpAI prepares concise responses you can use immediately."],
+          ["Screenshot feedback", "Capture the screen and get context-aware help for code, errors, diagrams, and product reviews."],
+          ["Separate code panel", "When code is generated, it opens in a dedicated overlay instead of interrupting the insight view."],
+          ["Local AI path", "Use Ollama and faster-whisper for a local-first workflow without sending work to a cloud model."],
+          ["Stealth overlay", "The HelpAI windows can be excluded from screen capture APIs to keep recordings clean."],
+          ["Configurable hotkeys", "Tune providers, models, opacity, shortcuts, audio capture, and screenshot analysis from settings."]
+        ];
+        return h("section", { id: "features", className: "shell" },
+          h("div", { className: "section-head" },
+            h("h2", null, "Built for calls, reviews, and coding sessions."),
+            h("p", null, "The interface stays compact, direct, and useful while the work is happening.")
+          ),
+          h("div", { className: "grid" },
+            features.map((item) => h("article", { className: "card", key: item[0] },
+              h("h3", null, item[0]),
+              h("p", null, item[1])
+            ))
+          )
+        );
+      }
+
+      function Privacy() {
+        return h("section", { id: "privacy", className: "shell" },
+          h("div", { className: "privacy-band" },
+            h("div", null,
+              h("div", { className: "eyebrow" }, "Clear privacy model"),
+              h("h2", { style: { margin: "18px 0 10px", fontSize: "38px", lineHeight: "1.05" } }, "Local by default when you choose local providers."),
+              h("p", { style: { color: "#9da8ba", margin: 0 } },
+                "HelpAI does not add telemetry, analytics, ads, or app-side data collection. Cloud providers are optional and only receive content when you configure and use them."
+              )
+            ),
+            h("div", { className: "split-list" },
+              ["Free app with no built-in paid service", "Open-source code you can inspect", "Ollama and faster-whisper keep processing local", "OpenAI/xAI are optional cloud integrations"].map((text) =>
+                h("div", { className: "check", key: text }, h("i", null, "✓"), h("span", null, text))
+              )
+            )
+          )
+        );
+      }
+
+      function Setup() {
+        const steps = [
+          ["Clone", "Get the project locally.", "git clone https://github.com/elSilveira/helpai"],
+          ["Install", "Create a Python environment.", "pip install -r requirements.txt"],
+          ["Local AI", "Pull an Ollama model.", "ollama pull qwen2.5:7b"],
+          ["Run", "Launch the overlay.", "python launcher.py"]
+        ];
+        return h("section", { id: "setup", className: "shell" },
+          h("div", { className: "section-head" },
+            h("h2", null, "Start local, add cloud only if you want it."),
+            h("p", null, "Use Ollama for local AI, or configure OpenAI/xAI keys for cloud providers.")
+          ),
+          h("div", { className: "steps" },
+            steps.map((step, index) => h("article", { className: "card", key: step[0] },
+              h("div", { className: "step-num" }, "0" + (index + 1)),
+              h("h3", null, step[0]),
+              h("p", null, step[1]),
+              h("div", { className: "command" }, step[2])
+            ))
+          )
+        );
+      }
+
+      function CTA() {
+        return h("section", { className: "shell" },
+          h("div", { className: "cta" },
+            h("div", null,
+              h("h2", null, "Free, open source, and ready to inspect."),
+              h("p", null, "Use HelpAI locally, audit the code, and adapt it for your workflow.")
+            ),
+            h("a", { className: "button primary", href: repoUrl }, "Open GitHub")
+          )
+        );
+      }
+
+      function App() {
+        return h(React.Fragment, null,
+          h(Nav),
+          h(Hero),
+          h(FeatureGrid),
+          h(Privacy),
+          h(Setup),
+          h(CTA),
+          h("footer", { className: "shell" }, "HelpAI is free open-source software. Cloud provider usage is optional and billed by those providers if configured.")
+        );
+      }
+
+      ReactDOM.createRoot(document.getElementById("root")).render(h(App));
+    </script>
+  </body>
+</html>
