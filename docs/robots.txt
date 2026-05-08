@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://elsilveira.github.io/helpai/sitemap.xml
