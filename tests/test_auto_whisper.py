@@ -1,4 +1,5 @@
 import unittest
+from types import SimpleNamespace
 
 import analyzer
 from auto_whisper import AutoWhisperState, build_auto_whisper_request
@@ -59,6 +60,62 @@ class AutoWhisperTests(unittest.TestCase):
         self.assertIn("Never generate follow-up questions", prompt)
         self.assertIn("1 to 3 short paragraphs", prompt)
         self.assertIn("prior responses", prompt)
+
+    def test_auto_whisper_keeps_newest_recent_context_when_bounded(self):
+        fake_client = FakeTextClient()
+        original_get_text_client = analyzer._get_text_client
+
+        try:
+            analyzer._get_text_client = lambda: fake_client
+            analyzer.analyze_auto_whisper(
+                "current transcript",
+                recent_context=("old context " * 700) + "LATEST_CONTEXT_TAIL",
+            )
+        finally:
+            analyzer._get_text_client = original_get_text_client
+
+        messages = fake_client.create_kwargs["messages"]
+        context_messages = [
+            message["content"]
+            for message in messages
+            if message["role"] == "system" and "old context" in message["content"]
+        ]
+        self.assertEqual(len(context_messages), 1)
+        self.assertIn("LATEST_CONTEXT_TAIL", context_messages[0])
+
+    def test_auto_whisper_keeps_newest_last_exchange_when_bounded(self):
+        fake_client = FakeTextClient()
+        original_get_text_client = analyzer._get_text_client
+
+        try:
+            analyzer._get_text_client = lambda: fake_client
+            analyzer.analyze_auto_whisper(
+                "current transcript",
+                last_exchange=(
+                    ("previous request " * 250) + "LATEST_REQUEST_TAIL",
+                    ("previous response " * 250) + "LATEST_RESPONSE_TAIL",
+                ),
+            )
+        finally:
+            analyzer._get_text_client = original_get_text_client
+
+        messages = fake_client.create_kwargs["messages"]
+        self.assertIn("LATEST_REQUEST_TAIL", messages[1]["content"])
+        self.assertIn("LATEST_RESPONSE_TAIL", messages[2]["content"])
+
+
+class FakeTextClient:
+    def __init__(self):
+        self.create_kwargs = None
+        self.chat = SimpleNamespace(
+            completions=SimpleNamespace(create=self._create)
+        )
+
+    def _create(self, **kwargs):
+        self.create_kwargs = kwargs
+        message = SimpleNamespace(content="covered")
+        choice = SimpleNamespace(message=message)
+        return SimpleNamespace(choices=[choice])
 
 
 if __name__ == "__main__":

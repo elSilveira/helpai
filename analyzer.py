@@ -86,6 +86,9 @@ def _get_image_model() -> str:
 
 
 _THINK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
+_LAST_EXCHANGE_CONTEXT_CHARS = 4000
+_AUTO_WHISPER_RECENT_CONTEXT_CHARS = 8000
+_OMITTED_CONTEXT_MARKER = "[Earlier context omitted to keep the live whisper request bounded.]\n"
 
 
 def _strip_thinking(text: str) -> str:
@@ -95,6 +98,18 @@ def _strip_thinking(text: str) -> str:
     if "<think>" in cleaned:
         cleaned = cleaned[:cleaned.index("<think>")]
     return cleaned.strip()
+
+
+def _keep_latest_context(text: str, max_chars: int) -> str:
+    """Bound context while preserving the newest tail of the conversation."""
+    text = text.strip()
+    if len(text) <= max_chars:
+        return text
+
+    available = max_chars - len(_OMITTED_CONTEXT_MARKER)
+    if available <= 0:
+        return text[-max_chars:]
+    return _OMITTED_CONTEXT_MARKER + text[-available:]
 
 
 # ── Response Profiles ───────────────────────────────────────────────────────
@@ -257,8 +272,18 @@ def analyze_text(
     if last_exchange:
         prev_req, prev_resp = last_exchange
         if prev_req and prev_resp:
-            messages.append({"role": "user", "content": prev_req[:2000]})
-            messages.append({"role": "assistant", "content": prev_resp[:2000]})
+            messages.append(
+                {
+                    "role": "user",
+                    "content": _keep_latest_context(prev_req, _LAST_EXCHANGE_CONTEXT_CHARS),
+                }
+            )
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": _keep_latest_context(prev_resp, _LAST_EXCHANGE_CONTEXT_CHARS),
+                }
+            )
 
     messages.append({"role": "user", "content": text})
 
@@ -328,11 +353,26 @@ def analyze_auto_whisper(
     if last_exchange:
         prev_req, prev_resp = last_exchange
         if prev_req and prev_resp:
-            messages.append({"role": "user", "content": prev_req[:2000]})
-            messages.append({"role": "assistant", "content": prev_resp[:2000]})
+            messages.append(
+                {
+                    "role": "user",
+                    "content": _keep_latest_context(prev_req, _LAST_EXCHANGE_CONTEXT_CHARS),
+                }
+            )
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": _keep_latest_context(prev_resp, _LAST_EXCHANGE_CONTEXT_CHARS),
+                }
+            )
 
     if recent_context:
-        messages.append({"role": "system", "content": recent_context[:6000]})
+        messages.append(
+            {
+                "role": "system",
+                "content": _keep_latest_context(recent_context, _AUTO_WHISPER_RECENT_CONTEXT_CHARS),
+            }
+        )
 
     messages.append({"role": "user", "content": text})
 
