@@ -75,7 +75,7 @@ capture: ContinuousCapture | None = None
 _tray_icon: "pystray.Icon | None" = None
 
 # ── Conversation context ────────────────────────────────────────────────────
-_context_memory = ContextMemory(max_entries=6, max_chars=7000)
+_context_memory = ContextMemory(max_entries=10, max_chars=12000)
 _auto_whisper_enabled: bool = False
 _auto_whisper_state = AutoWhisperState()
 _auto_whisper_timer: threading.Timer | None = None
@@ -144,6 +144,29 @@ def _save_exchange(request_text: str, response_text: str, kind: str = "conversat
     _context_memory.add(kind, request_text, response_text)
 
 
+def _get_previous_response_history(current_response: str, limit: int = 3) -> list[str]:
+    """Return newest prior response texts for the insight panel history."""
+    current = current_response.strip()
+    responses = [entry.response for entry in _context_memory.recent_entries(limit + 1)]
+    if current and responses and responses[-1].strip() == current:
+        responses = responses[:-1]
+
+    history: list[str] = []
+    for response in reversed(responses):
+        text = response.strip()
+        if not text or text == current:
+            continue
+        history.append(response)
+        if len(history) >= limit:
+            break
+    return history
+
+
+def _set_insight_with_history(response_text: str) -> None:
+    if app:
+        app.set_insight_history(response_text, _get_previous_response_history(response_text))
+
+
 def _set_auto_whisper_enabled(enabled: bool) -> None:
     """Enable/disable automatic non-destructive conversation whispers."""
     global _auto_whisper_enabled, _auto_whisper_timer
@@ -200,7 +223,7 @@ def _run_auto_whisper() -> None:
             on_token=lambda t: app.schedule(app.set_insight, t),
         )
         _save_exchange(request_text, result, kind="auto_whisper")
-        app.schedule(app.set_insight, result)
+        app.schedule(_set_insight_with_history, result)
     except Exception as exc:
         logger.exception("Auto whisper error")
         app.schedule(app.set_insight, f"Auto Whisper error: {exc}")
@@ -241,10 +264,11 @@ def _action_audio_analysis() -> None:
             result = analyze_text(
                 selected.strip(),
                 last_exchange=_get_last_exchange(),
+                recent_context=_get_recent_context(),
                 on_token=lambda t: app.schedule(app.set_insight, t),
             )
             _save_exchange(selected.strip(), result, kind="selection")
-            app.schedule(app.set_insight, result)
+            app.schedule(_set_insight_with_history, result)
         except Exception as exc:
             logger.exception("Selection analysis error")
             app.schedule(app.set_insight, f"Error: {exc}")
@@ -274,6 +298,7 @@ def _action_audio_analysis() -> None:
         result = analyze_transcript(
             input_text, output_text,
             last_exchange=_get_last_exchange(),
+            recent_context=_get_recent_context(),
             on_token=lambda t: app.schedule(app.set_insight, t),
         )
         # Build combined request text for context extraction
@@ -283,7 +308,7 @@ def _action_audio_analysis() -> None:
         if input_text.strip():
             combined_req += f"[YOU]:\n{input_text.strip()}"
         _save_exchange(combined_req, result, kind="audio")
-        app.schedule(app.set_insight, result)
+        app.schedule(_set_insight_with_history, result)
     except Exception as exc:
         logger.exception("Audio analysis error")
         app.schedule(app.set_insight, f"Error: {exc}")
@@ -336,7 +361,7 @@ def _action_screenshot_feedback() -> None:
             on_token=lambda t: app.schedule(app.set_insight, t),
         )
         _save_exchange("Screenshot feedback request", result, kind="screenshot")
-        app.schedule(app.set_insight, result)
+        app.schedule(_set_insight_with_history, result)
     except Exception as exc:
         logger.exception("Screenshot analysis error")
         app.schedule(app.show)
@@ -366,10 +391,11 @@ def _action_quick_input_submit(text: str) -> None:
             result = analyze_text(
                 text,
                 last_exchange=_get_last_exchange(),
+                recent_context=_get_recent_context(),
                 on_token=lambda t: app.schedule(app.set_insight, t),
             )
             _save_exchange(text, result, kind="quick_input")
-            app.schedule(app.set_insight, result)
+            app.schedule(_set_insight_with_history, result)
         except Exception as exc:
             logger.exception("Quick-input analysis error")
             app.schedule(app.set_insight, f"Error: {exc}")

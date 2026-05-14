@@ -40,6 +40,12 @@ class ContextMemory:
         entry = self.entries[-1]
         return entry.request, entry.response
 
+    def recent_entries(self, limit: int = 4) -> list[ContextEntry]:
+        """Return up to ``limit`` newest entries in chronological order."""
+        if limit <= 0:
+            return []
+        return self.entries[-limit:]
+
     def build_context_block(self) -> str:
         """Build a bounded newest-first context block for the LLM."""
         if not self.entries:
@@ -67,6 +73,7 @@ class ContextMemory:
 
         selected.reverse()
         return (
-            "Recent context memory. Use this only when relevant; ignore stale or unrelated context.\n\n"
+            "Recent context memory. Use this only when relevant to the current request; "
+            "ignore stale, unrelated, or conflicting context instead of forcing continuity.\n\n"
             + "\n\n---\n\n".join(selected)
         )

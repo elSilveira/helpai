@@ -37,6 +37,26 @@ class InsightContentTests(unittest.TestCase):
         self.assertEqual(content.code, "")
         self.assertFalse(content.has_code)
 
+    def test_prepares_current_and_three_prior_insight_history_blocks(self):
+        blocks = overlay.prepare_insight_history(
+            "current response",
+            ["previous response 1", "previous response 2", "previous response 3", "previous response 4"],
+        )
+
+        self.assertEqual([block.text for block in blocks], [
+            "current response",
+            "previous response 1",
+            "previous response 2",
+            "previous response 3",
+        ])
+        self.assertEqual([block.label for block in blocks], ["Now", "Previous 1", "Previous 2", "Previous 3"])
+        self.assertEqual([block.tag for block in blocks], [
+            "insight_current",
+            "insight_history_1",
+            "insight_history_2",
+            "insight_history_3",
+        ])
+
 
 if __name__ == "__main__":
     unittest.main()

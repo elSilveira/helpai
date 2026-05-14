@@ -252,6 +252,7 @@ VISION_PROMPT = (
 def analyze_text(
     text: str,
     last_exchange: tuple[str, str] | None = None,
+    recent_context: str | None = None,
     on_token: "callable | None" = None,
 ) -> str:
     """Generate insights from a text transcript or question.
@@ -259,6 +260,7 @@ def analyze_text(
     Args:
         text: The current transcript/question to analyze.
         last_exchange: Optional (request, response) from the previous analysis.
+        recent_context: Optional bounded context memory across recent responses.
         on_token: If provided, called with accumulated text on each streamed chunk.
     """
     client = _get_text_client()
@@ -284,6 +286,14 @@ def analyze_text(
                     "content": _keep_latest_context(prev_resp, _LAST_EXCHANGE_CONTEXT_CHARS),
                 }
             )
+
+    if recent_context:
+        messages.append(
+            {
+                "role": "system",
+                "content": _keep_latest_context(recent_context, _AUTO_WHISPER_RECENT_CONTEXT_CHARS),
+            }
+        )
 
     messages.append({"role": "user", "content": text})
 
@@ -543,6 +553,7 @@ def analyze_transcript(
     input_text: str,
     output_text: str,
     last_exchange: tuple[str, str] | None = None,
+    recent_context: str | None = None,
     on_token: "callable | None" = None,
 ) -> str:
     """Analyze pre-transcribed text from mic (input) and system (output) streams."""
@@ -568,7 +579,12 @@ def analyze_transcript(
         def stream_cb(partial_text):
             on_token(header + partial_text)
 
-    insights = analyze_text(combined, last_exchange=last_exchange, on_token=stream_cb)
+    insights = analyze_text(
+        combined,
+        last_exchange=last_exchange,
+        recent_context=recent_context,
+        on_token=stream_cb,
+    )
     return header + insights
 
 

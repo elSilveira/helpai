@@ -77,7 +77,21 @@ class InsightContent:
         return bool(self.code.strip())
 
 
+@dataclass(frozen=True)
+class InsightHistoryBlock:
+    label: str
+    text: str
+    tag: str
+
+
 _FENCED_CODE_RE = re.compile(r"```[^\n`]*\n?(.*?)(?:```|$)", re.DOTALL)
+_INSIGHT_HISTORY_LIMIT = 4
+_INSIGHT_HISTORY_COLORS = {
+    "insight_current": "#f8f8f2",
+    "insight_history_1": "#f5c2c7",
+    "insight_history_2": "#f38ba8",
+    "insight_history_3": "#e64553",
+}
 
 
 def split_insight_content(text: str) -> InsightContent:
@@ -92,6 +106,35 @@ def split_insight_content(text: str) -> InsightContent:
     insights = re.sub(r"\n{3,}", "\n\n", insights).strip()
     code = "\n\n".join(block for block in code_blocks if block)
     return InsightContent(insights=insights, code=code)
+
+
+def prepare_insight_history(
+    current_text: str,
+    previous_responses: list[str] | tuple[str, ...],
+    limit: int = _INSIGHT_HISTORY_LIMIT,
+) -> list[InsightHistoryBlock]:
+    """Prepare current + prior response blocks for the insight panel."""
+    blocks: list[InsightHistoryBlock] = []
+    seen: set[str] = set()
+
+    current = (current_text or "").strip()
+    if current and limit > 0:
+        blocks.append(InsightHistoryBlock(label="Now", text=current, tag="insight_current"))
+        seen.add(current)
+
+    previous_index = 0
+    for response in previous_responses:
+        if len(blocks) >= limit:
+            break
+        text = (response or "").strip()
+        if not text or text in seen:
+            continue
+        previous_index += 1
+        tag = f"insight_history_{previous_index}"
+        blocks.append(InsightHistoryBlock(label=f"Previous {previous_index}", text=text, tag=tag))
+        seen.add(text)
+
+    return blocks
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -1602,6 +1645,42 @@ class OverlayApp:
         else:
             self._insight_user_scrolled = False
 
+    def _configure_insight_history_tags(self) -> None:
+        if self._insight_text is None:
+            return
+        self._insight_text.tag_configure(
+            "insight_history_label",
+            foreground=_OVERLAY0,
+            font=(OVERLAY_FONT_FAMILY, max(7, OVERLAY_FONT_SIZE - 2), "bold"),
+            spacing1=6,
+            spacing3=2,
+        )
+        for tag, color in _INSIGHT_HISTORY_COLORS.items():
+            self._insight_text.tag_configure(tag, foreground=color, spacing1=2, spacing3=3)
+
+    @staticmethod
+    def _history_display_text(response: str) -> str:
+        content = split_insight_content(response)
+        return content.insights or response.strip()
+
+    def _write_insight_history_widget(self, blocks: list[InsightHistoryBlock]) -> None:
+        if self._insight_text is None:
+            return
+        self._configure_insight_history_tags()
+        ypos = self._insight_text.yview() if self._insight_user_scrolled else None
+        self._insight_text.config(state=tk.NORMAL)
+        self._insight_text.delete("1.0", tk.END)
+        for index, block in enumerate(blocks):
+            if index:
+                self._insight_text.insert(tk.END, "\n\n")
+            self._insight_text.insert(tk.END, f"{block.label}\n", ("insight_history_label",))
+            self._insight_text.insert(tk.END, block.text, (block.tag,))
+        self._insight_text.config(state=tk.DISABLED)
+        if ypos is not None:
+            self._insight_text.yview_moveto(ypos[0])
+        elif not self._insight_user_scrolled:
+            self._insight_text.see(tk.END)
+
     def set_insight(self, text: str) -> None:
         """Replace insight panel content."""
         self._ensure_insight_panel()
@@ -1630,6 +1709,28 @@ class OverlayApp:
 
         self._auto_expand_insight()
         logger.debug("Insight panel updated (%d chars).", len(text))
+
+    def set_insight_history(self, text: str, previous_responses: list[str] | tuple[str, ...]) -> None:
+        """Show current insight plus recent response history in one panel."""
+        self._ensure_insight_panel()
+        if not self._insight_visible:
+            self.toggle_insight()
+        self.root.deiconify()
+        if self._insight_text is None:
+            return
+
+        self._insight_raw_text = text
+        content = split_insight_content(text)
+        current_display = content.insights or text.strip()
+        previous_display = [self._history_display_text(response) for response in previous_responses]
+        blocks = prepare_insight_history(current_display, previous_display)
+
+        self._write_insight_history_widget(blocks)
+        self._set_code(content.code, is_streaming=False)
+        self._insight_text.see("1.0")
+        self._insight_last_len = len(text)
+        self._auto_expand_insight()
+        logger.debug("Insight history panel updated (%d chars, %d blocks).", len(text), len(blocks))
 
     def _write_text_widget(
         self,

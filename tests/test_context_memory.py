@@ -37,6 +37,15 @@ class ContextMemoryTests(unittest.TestCase):
 
         self.assertEqual(memory.latest_exchange(), ("second request", "second response"))
 
+    def test_recent_entries_returns_last_entries_in_chronological_order(self):
+        memory = ContextMemory(max_entries=5, max_chars=10_000)
+        for index in range(5):
+            memory.add("auto_whisper", f"request {index}", f"response {index}")
+
+        entries = memory.recent_entries(limit=3)
+
+        self.assertEqual([entry.response for entry in entries], ["response 2", "response 3", "response 4"])
+
     def test_ignores_empty_entries(self):
         memory = ContextMemory(max_entries=3, max_chars=10_000)
 
