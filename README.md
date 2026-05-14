@@ -76,8 +76,18 @@ $env:XAI_API_KEY = "xai-..."
 
 ## Running
 
+For the easiest source run on Windows, use the batch launcher. It switches to
+the repo folder, creates `.venv` if needed, installs dependencies, and opens the
+settings launcher:
+
 ```powershell
-python launcher.py
+.\run.bat
+```
+
+Or run the Python entry point directly through the virtual environment:
+
+```powershell
+.\.venv\Scripts\python.exe launcher.py
 ```
 
 The overlay window will appear on your primary monitor. Use the hotkeys above
@@ -106,6 +116,9 @@ That produces:
 - `dist\HelpAI\HelpAI.exe` for the existing Windows installer flow
 - `dist\pip\helpai-<version>-py3-none-any.whl` for `pip install`
 - `dist\pip\helpai-<version>.tar.gz` as the source distribution
+
+The executable bundle includes faster-whisper assets and the CUDA runtime hook
+needed for local transcription in GPU mode.
 
 If you only want the Windows executable from Python, run:
 

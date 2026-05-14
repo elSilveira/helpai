@@ -72,6 +72,12 @@ REQUIRED_BUNDLE_PATHS = [
     Path("_internal") / "faster_whisper" / "assets" / "silero_vad_v6.onnx",
 ]
 
+# Runtime hook that adds bundled CUDA DLL directories to PATH / os.add_dll_directory.
+# This is required for local faster-whisper transcription when the frozen app uses CUDA.
+RUNTIME_HOOKS = [
+    ROOT / "rthook_cuda.py",
+]
+
 DATA_FILES = [
     # (source, dest_folder_in_bundle)
 ]
@@ -186,6 +192,10 @@ def build():
 
     for package in COLLECT_BINARIES_PACKAGES:
         cmd += ["--collect-binaries", package]
+
+    for hook in RUNTIME_HOOKS:
+        if hook.exists():
+            cmd += ["--runtime-hook", str(hook)]
 
     for src, dest in DATA_FILES:
         cmd += ["--add-data", f"{src};{dest}"]

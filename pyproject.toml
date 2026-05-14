@@ -23,12 +23,16 @@ dependencies = [
     "mss>=9.0.0",
     "Pillow>=10.0.0",
     "SoundCard>=0.4.3",
+    "keyboard>=0.13.5; sys_platform == 'win32'",
+    "pywin32>=306; sys_platform == 'win32'",
+    "pystray>=0.19.5; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]
 windows = [
     "pywin32>=306",
     "keyboard>=0.13.5",
+    "pystray>=0.19.5",
 ]
 cuda = [
     "nvidia-cublas-cu12>=12.4.0",
