@@ -144,7 +144,7 @@ try {
     }
 
     Write-Host "Launching HelpAI..."
-    Start-Process -FilePath $venvPythonw -ArgumentList @((Join-Path $Root "launcher.py")) -WorkingDirectory $Root -WindowStyle Hidden
+    Start-Process -FilePath $venvPythonw -ArgumentList @((Join-Path $Root "main.py")) -WorkingDirectory $Root -WindowStyle Hidden
 
     Stop-Transcript | Out-Null
 } catch {

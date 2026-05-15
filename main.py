@@ -18,7 +18,11 @@ import pystray
 from PIL import Image, ImageDraw, ImageFont
 
 from analyzer import analyze_auto_whisper, analyze_screenshot, analyze_text, analyze_transcript
-from auto_whisper import AUTO_WHISPER_DEBOUNCE_SECONDS, AutoWhisperState, build_auto_whisper_request
+from auto_whisper import (
+    AUTO_WHISPER_DEBOUNCE_SECONDS,
+    AUTO_WHISPER_IDLE_RETRY_SECONDS,
+    AutoWhisperState,
+)
 from context_memory import ContextMemory
 from audio_capture import ContinuousCapture, check_audio_available
 from config import (
@@ -181,6 +185,11 @@ def _set_auto_whisper_enabled(enabled: bool) -> None:
 
 def _schedule_auto_whisper() -> None:
     """Debounce auto whispering until transcript paragraphs settle briefly."""
+    _schedule_auto_whisper_after(AUTO_WHISPER_DEBOUNCE_SECONDS)
+
+
+def _schedule_auto_whisper_after(delay_seconds: float) -> None:
+    """Schedule or replace the pending auto-whisper timer."""
     global _auto_whisper_timer
     if capture is None:
         return
@@ -189,9 +198,20 @@ def _schedule_auto_whisper() -> None:
             return
         if _auto_whisper_timer is not None:
             _auto_whisper_timer.cancel()
-        _auto_whisper_timer = threading.Timer(AUTO_WHISPER_DEBOUNCE_SECONDS, _run_auto_whisper)
+        _auto_whisper_timer = threading.Timer(max(0.1, delay_seconds), _run_auto_whisper)
         _auto_whisper_timer.daemon = True
         _auto_whisper_timer.start()
+
+
+def _capture_has_active_audio() -> bool:
+    if capture is None:
+        return False
+    try:
+        levels = capture.get_audio_levels()
+    except Exception:
+        logger.debug("Could not read audio levels for auto-whisper gating.", exc_info=True)
+        return False
+    return any(bool(stream.get("active")) for stream in levels.values())
 
 
 def _run_auto_whisper() -> None:
@@ -204,15 +224,28 @@ def _run_auto_whisper() -> None:
         _auto_whisper_timer = None
         if not _auto_whisper_enabled or _auto_whisper_running:
             return
+
+    if _capture_has_active_audio():
+        _schedule_auto_whisper_after(AUTO_WHISPER_IDLE_RETRY_SECONDS)
+        return
+
+    wait_seconds = _auto_whisper_state.retry_after_seconds()
+    if wait_seconds > 0:
+        _schedule_auto_whisper_after(wait_seconds)
+        return
+
+    input_text, output_text = _auto_whisper_state.snapshot_from_capture(capture)
+    request_text = _auto_whisper_state.build_request_if_ready(input_text, output_text)
+    if not request_text:
+        return
+
+    with _auto_whisper_lock:
+        if not _auto_whisper_enabled or _auto_whisper_running:
+            return
         _auto_whisper_running = True
 
     loading_started = False
     try:
-        input_text, output_text = _auto_whisper_state.snapshot_from_capture(capture)
-        if not _auto_whisper_state.mark_if_changed(input_text, output_text):
-            return
-
-        request_text = build_auto_whisper_request(input_text, output_text)
         loading_started = True
         app.schedule(app.begin_loading, "Auto Whisper")
         app.schedule(app.set_status, "Auto whispering...")
