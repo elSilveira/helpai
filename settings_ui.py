@@ -8,11 +8,14 @@ toggled by icon buttons on the left rail.
 import tkinter as tk
 from tkinter import ttk, messagebox
 import logging
+import threading
+import webbrowser
 
 import keyboard as kb
 
 from audio_capture import list_microphone_choices, list_speaker_choices
 import settings as store
+from codex_client import CodexClient, find_codex_executable
 from config import (
     APP_NAME,
     APP_VERSION,
@@ -258,6 +261,7 @@ class SettingsWindow:
 
     # Section definitions: (key, icon, label)
     _SECTIONS = [
+        ("codex",      "CX", "Codex"),
         ("llm",        "🧠", "AI Model"),
         ("audio",      "🎙", "Audio"),
         ("stt",        "🎤", "Speech"),
@@ -270,10 +274,14 @@ class SettingsWindow:
         self.data = store.load()
         self._choice_maps: dict[str, dict[str, str]] = {}
         self._entries: dict[str, tk.Widget] = {}
+        self._ensure_combo_widget_registry()
         self._nav_buttons: dict[str, tk.Label] = {}
         self._panels: dict[str, tk.Frame] = {}
         self._active_section: str = "llm"
         self._ollama_pulled: set[str] = set()
+        self._codex_account: dict | None = None
+        self._codex_available = False
+        self._codex_error = ""
         self._mic_choices: list = []
         self._spk_choices: list = []
 
@@ -290,6 +298,11 @@ class SettingsWindow:
         self.root.geometry(f"{w}x{h}+{sx}+{sy}")
 
         self._build()
+
+    def _ensure_combo_widget_registry(self) -> dict[str, ttk.Combobox]:
+        if not hasattr(self, "_combo_widgets"):
+            self._combo_widgets: dict[str, ttk.Combobox] = {}
+        return self._combo_widgets
 
     # ── Layout skeleton ────────────────────────────────────────────────
 
@@ -430,12 +443,32 @@ class SettingsWindow:
             self.data.get("LLM_IMAGE_PROVIDER", ""),
         )
         self._ollama_pulled = _query_ollama_models() if uses_ollama else set()
+        self._load_codex_status()
         self._mic_choices = list_microphone_choices()
         self._spk_choices = list_speaker_choices()
         try:
             self.root.after(0, self._finish_build)
         except Exception:
             pass
+
+    def _load_codex_status(self):
+        """Best-effort Codex CLI/OAuth detection for the settings UI."""
+        self._codex_available = find_codex_executable() is not None
+        self._codex_account = None
+        self._codex_error = ""
+        if not self._codex_available:
+            self._codex_error = "Codex CLI not found"
+            return
+
+        client = CodexClient()
+        try:
+            account = client.get_account(refresh_token=True).get("account")
+            if account and account.get("type") == "chatgpt":
+                self._codex_account = account
+        except Exception as exc:
+            self._codex_error = str(exc)
+        finally:
+            client.close()
 
     def _finish_build(self):
         """Build all setting panels after background data is ready."""
@@ -445,6 +478,7 @@ class SettingsWindow:
         self._loading_frame.destroy()
 
         self._build_llm_panel()
+        self._build_codex_panel()
         self._build_audio_panel()
         self._build_stt_panel()
         self._build_hotkeys_panel()
@@ -495,6 +529,16 @@ class SettingsWindow:
         self._panels[key] = outer
         return inner
 
+    def _llm_provider_options(self):
+        options = [("OpenAI API", "openai"), ("Ollama (Local)", "ollama")]
+        selected = {
+            self.data.get("LLM_TEXT_PROVIDER", ""),
+            self.data.get("LLM_IMAGE_PROVIDER", ""),
+        }
+        if self._codex_account or "codex" in selected:
+            options.append(("Codex OAuth", "codex"))
+        return options
+
     def _build_llm_panel(self):
         p = self._make_panel("llm")
         f = (_FONT, 11)
@@ -514,9 +558,9 @@ class SettingsWindow:
         # Provider card
         card = self._card(p, "Provider")
         self._combo_row(card, "Text Provider", "LLM_TEXT_PROVIDER", f,
-                        [("OpenAI API", "openai"), ("Ollama (Local)", "ollama")], width=20)
+                        self._llm_provider_options(), width=20)
         self._combo_row(card, "Image Provider", "LLM_IMAGE_PROVIDER", f,
-                        [("OpenAI API", "openai"), ("Ollama (Local)", "ollama")], width=20)
+                        self._llm_provider_options(), width=20)
         self._hint(card, "You can mix providers — e.g. Ollama for text, OpenAI for images")
 
         # OpenAI card
@@ -568,6 +612,130 @@ class SettingsWindow:
         setup_btn.bind("<Button-1>", lambda _: self._setup_ollama())
         setup_btn.bind("<Enter>", lambda e: setup_btn.config(bg=_MAUVE))
         setup_btn.bind("<Leave>", lambda e: setup_btn.config(bg=_ACCENT))
+
+    def _build_codex_panel(self):
+        p = self._make_panel("codex")
+        f = (_FONT, 11)
+
+        self._panel_header(p, "Codex OAuth", "Use your local Codex login instead of an OpenAI API key")
+
+        card = self._card(p, "Status")
+        self._codex_status_lbl = tk.Label(
+            card,
+            text=self._codex_status_text(),
+            bg=_CARD,
+            fg=self._codex_status_color(),
+            font=(_FONT, 10),
+            anchor="w",
+            justify=tk.LEFT,
+            wraplength=470,
+        )
+        self._codex_status_lbl.pack(fill=tk.X, pady=(0, 8))
+
+        button_row = tk.Frame(card, bg=_CARD)
+        button_row.pack(fill=tk.X)
+        self._action_button(button_row, "Sign In", lambda: self._start_codex_login(False), side=tk.LEFT)
+        self._action_button(button_row, "Device Code", lambda: self._start_codex_login(True), side=tk.LEFT)
+        self._action_button(button_row, "Refresh", self._refresh_codex_status, side=tk.LEFT)
+        self._hint(card, "HelpAI talks to codex app-server and never reads ~/.codex/auth.json")
+
+        card = self._card(p, "Model")
+        self._text_row(card, "Model Override", "CODEX_MODEL", f)
+        self._hint(card, "Leave empty to use the default model from your Codex configuration")
+
+    def _codex_status_text(self) -> str:
+        if not self._codex_available:
+            return "Codex CLI is not installed. Install with: npm install -g @openai/codex"
+        if self._codex_account:
+            email = self._codex_account.get("email", "signed in")
+            plan = self._codex_account.get("planType", "unknown")
+            return f"Signed in as {email} ({plan}). Codex is available in provider selectors."
+        if self._codex_error:
+            return f"Codex CLI found, but OAuth is not ready: {self._codex_error}"
+        return "Codex CLI found, but no ChatGPT OAuth account is signed in."
+
+    def _codex_status_color(self) -> str:
+        if self._codex_account:
+            return _GREEN
+        if self._codex_available:
+            return _YELLOW
+        return _RED
+
+    def _action_button(self, parent: tk.Widget, text: str, command, side=tk.RIGHT):
+        btn = tk.Label(
+            parent,
+            text=f"  {text}  ",
+            bg=_ACCENT,
+            fg=_CRUST,
+            font=(_FONT, 9, "bold"),
+            cursor="hand2",
+            pady=4,
+            padx=6,
+        )
+        btn.pack(side=side, padx=(0, 8))
+        btn.bind("<Button-1>", lambda _e: command())
+        btn.bind("<Enter>", lambda e: btn.config(bg=_MAUVE))
+        btn.bind("<Leave>", lambda e: btn.config(bg=_ACCENT))
+        return btn
+
+    def _start_codex_login(self, device_code: bool):
+        def worker():
+            client = CodexClient()
+            try:
+                login = client.start_login(device_code=device_code)
+            except Exception as exc:
+                self.root.after(0, lambda: messagebox.showerror("Codex", str(exc), parent=self.root))
+                return
+            finally:
+                client.close()
+
+            def show_login():
+                if login.get("authUrl"):
+                    webbrowser.open(login["authUrl"])
+                    messagebox.showinfo(
+                        "Codex",
+                        "Browser login opened. Finish signing in, then click Refresh.",
+                        parent=self.root,
+                    )
+                else:
+                    messagebox.showinfo(
+                        "Codex Device Code",
+                        f"Open {login.get('verificationUrl')}\n\nCode: {login.get('userCode')}",
+                        parent=self.root,
+                    )
+
+            self.root.after(0, show_login)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _refresh_codex_status(self):
+        def worker():
+            self._load_codex_status()
+            self.root.after(0, self._apply_codex_status)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _apply_codex_status(self):
+        if hasattr(self, "_codex_status_lbl"):
+            self._codex_status_lbl.config(
+                text=self._codex_status_text(),
+                fg=self._codex_status_color(),
+            )
+        self._refresh_provider_combos()
+
+    def _refresh_provider_combos(self):
+        options = self._llm_provider_options()
+        for key in ("LLM_TEXT_PROVIDER", "LLM_IMAGE_PROVIDER"):
+            combo = self._ensure_combo_widget_registry().get(key)
+            var = self._entries.get(key)
+            if combo is None or not isinstance(var, tk.StringVar):
+                continue
+            current_value = self._choice_maps.get(key, {}).get(var.get(), self.data.get(key, "openai"))
+            label_to_value = {label: value for label, value in options}
+            value_to_label = {value: label for label, value in options}
+            self._choice_maps[key] = label_to_value
+            combo.configure(values=[label for label, _value in options])
+            var.set(value_to_label.get(current_value, options[0][0]))
 
     def _build_audio_panel(self):
         p = self._make_panel("audio")
@@ -1116,6 +1284,7 @@ class SettingsWindow:
         )
         combo.pack(side=tk.LEFT, padx=(4, 0))
         self._entries[key] = var
+        self._ensure_combo_widget_registry()[key] = combo
 
         # Attach per-item dropdown tooltip for combos with long labels
         has_tuple_options = options and isinstance(options[0], tuple)

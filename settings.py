@@ -58,6 +58,7 @@ DEFAULTS = {
     "OPENAI_API_KEY": "",
     "OPENAI_TEXT_MODEL": "gpt-4o",
     "OPENAI_IMAGE_MODEL": "gpt-4o",
+    "CODEX_MODEL": "",
     "OLLAMA_BASE_URL": "http://localhost:11434",
     "OLLAMA_TEXT_MODEL": "qwen3:8b",
     "OLLAMA_IMAGE_MODEL": "gemma3:12b",

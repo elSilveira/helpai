@@ -49,6 +49,7 @@ py-modules = [
     "auto_whisper",
     "config",
     "context_memory",
+    "codex_client",
     "create_shortcut",
     "helpai",
     "helpai_version",

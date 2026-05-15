@@ -12,6 +12,7 @@ import logging
 import re
 
 import settings as _settings_store
+from codex_client import get_default_client
 from openai import OpenAI, NotFoundError, APIConnectionError
 
 from config import (
@@ -20,6 +21,7 @@ from config import (
     OPENAI_API_KEY,
     OPENAI_TEXT_MODEL,
     OPENAI_IMAGE_MODEL,
+    CODEX_MODEL,
     OLLAMA_BASE_URL,
     OLLAMA_TEXT_MODEL,
     OLLAMA_IMAGE_MODEL,
@@ -34,6 +36,7 @@ _text_client: OpenAI | None = None
 _image_client: OpenAI | None = None
 _text_provider_cache: str | None = None
 _image_provider_cache: str | None = None
+_codex_client = None
 
 
 def _make_client(provider: str) -> OpenAI:
@@ -44,11 +47,13 @@ def _make_client(provider: str) -> OpenAI:
             api_key="ollama",
             max_retries=0,
         )
+    if provider == "codex":
+        raise RuntimeError("Codex provider uses codex app-server, not an OpenAI-compatible client.")
     else:
         if not OPENAI_API_KEY:
             raise RuntimeError(
                 "OPENAI_API_KEY is not set. "
-                "Set it in Settings or switch provider to Ollama."
+                "Set it in Settings or switch provider to Ollama/Codex."
             )
         return OpenAI(api_key=OPENAI_API_KEY)
 
@@ -75,13 +80,25 @@ def _get_image_client() -> OpenAI:
     return _image_client
 
 
+def _get_codex_client():
+    """Return the shared Codex app-server client."""
+    global _codex_client
+    if _codex_client is None:
+        _codex_client = get_default_client()
+    return _codex_client
+
+
 def _get_model() -> str:
     """Return the active text model name based on provider."""
+    if LLM_TEXT_PROVIDER == "codex":
+        return CODEX_MODEL
     return OLLAMA_TEXT_MODEL if LLM_TEXT_PROVIDER == "ollama" else OPENAI_TEXT_MODEL
 
 
 def _get_image_model() -> str:
     """Return the active image/vision model name based on provider."""
+    if LLM_IMAGE_PROVIDER == "codex":
+        return CODEX_MODEL
     return OLLAMA_IMAGE_MODEL if LLM_IMAGE_PROVIDER == "ollama" else OPENAI_IMAGE_MODEL
 
 
@@ -162,6 +179,28 @@ def _get_active_profile() -> str:
     """Return the profile prompt for the currently selected profile (hot-reloaded)."""
     key = (_settings_store.get("RESPONSE_PROFILE") or "software_engineer").strip().lower()
     return RESPONSE_PROFILES.get(key, RESPONSE_PROFILES["software_engineer"])
+
+
+def _messages_to_codex_prompt(messages: list[dict]) -> str:
+    """Flatten chat-style messages into one Codex app-server text request."""
+    parts = [
+        "Respond only with the final assistant answer for HelpAI. "
+        "Do not describe your process or mention the transport."
+    ]
+    for message in messages:
+        role = str(message.get("role", "user")).upper()
+        content = message.get("content", "")
+        parts.append(f"[{role}]\n{content}")
+    return "\n\n".join(parts)
+
+
+def _run_codex_text(messages: list[dict], on_token: "callable | None" = None) -> str:
+    content = _get_codex_client().generate_text(
+        _messages_to_codex_prompt(messages),
+        on_token=on_token,
+        model=CODEX_MODEL or None,
+    )
+    return _strip_thinking(content).strip()
 
 
 # ── Audio → Text ────────────────────────────────────────────────────────────
@@ -263,7 +302,6 @@ def analyze_text(
         recent_context: Optional bounded context memory across recent responses.
         on_token: If provided, called with accumulated text on each streamed chunk.
     """
-    client = _get_text_client()
     is_ollama = LLM_TEXT_PROVIDER == "ollama"
 
     # Build effective system prompt with the active response profile (hot-reloaded)
@@ -297,6 +335,12 @@ def analyze_text(
 
     messages.append({"role": "user", "content": text})
 
+    if LLM_TEXT_PROVIDER == "codex":
+        content = _run_codex_text(messages, on_token=on_token)
+        logger.info("Text analysis complete via Codex.")
+        return content
+
+    client = _get_text_client()
     max_tok = 2048 if is_ollama else 4096
     use_stream = on_token is not None
 
@@ -356,7 +400,6 @@ def analyze_auto_whisper(
     on_token: "callable | None" = None,
 ) -> str:
     """Generate a compact automatic live-conversation suggestion."""
-    client = _get_text_client()
     is_ollama = LLM_TEXT_PROVIDER == "ollama"
     messages = [{"role": "system", "content": _get_active_profile() + "\n\n" + AUTO_WHISPER_PROMPT}]
 
@@ -386,6 +429,12 @@ def analyze_auto_whisper(
 
     messages.append({"role": "user", "content": text})
 
+    if LLM_TEXT_PROVIDER == "codex":
+        content = _run_codex_text(messages, on_token=on_token)
+        logger.info("Auto whisper complete via Codex.")
+        return content
+
+    client = _get_text_client()
     max_tok = 768 if is_ollama else 1024
     use_stream = on_token is not None
 
@@ -445,7 +494,6 @@ def analyze_screenshot(
     recent_context: str | None = None,
 ) -> str:
     """Send a screenshot to the vision model and return insights."""
-    client = _get_image_client()
     views = prepare_vision_views(image_bytes)
     content: list[dict] = [{"type": "text", "text": VISION_PROMPT}]
     if recent_context:
@@ -490,6 +538,26 @@ def analyze_screenshot(
             }
         )
 
+    if LLM_IMAGE_PROVIDER == "codex":
+        prompt_parts: list[str] = []
+        image_urls: list[str] = []
+        for item in content:
+            if item.get("type") == "text":
+                prompt_parts.append(item.get("text", ""))
+            elif item.get("type") == "image_url":
+                image_url = item.get("image_url", {}).get("url", "")
+                if image_url:
+                    image_urls.append(image_url)
+        codex_content = _get_codex_client().generate_text(
+            "\n\n".join(prompt_parts),
+            image_urls=image_urls,
+            on_token=on_token,
+            model=CODEX_MODEL or None,
+        )
+        logger.info("Screenshot analysis complete via Codex using %d view(s).", len(views))
+        return _strip_thinking(codex_content).strip()
+
+    client = _get_image_client()
     is_ollama = LLM_IMAGE_PROVIDER == "ollama"
     max_tok = 2048 if is_ollama else 4096
     use_stream = on_token is not None

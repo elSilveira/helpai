@@ -149,6 +149,7 @@ helpai/
 |-- config.py           # Configuration loaded from settings/environment
 |-- settings.py         # Local settings storage
 |-- settings_ui.py      # Settings window
+|-- codex_client.py     # Codex app-server OAuth provider integration
 |-- overlay.py          # Tkinter overlay UI and separate insight/code panels
 |-- visibility.py       # Win32 SetWindowDisplayAffinity wrapper
 |-- audio_capture.py    # Continuous microphone + loopback capture via SoundCard
@@ -166,9 +167,10 @@ Most options can be changed in the settings UI. Advanced users can also edit
 
 | Parameter | Description |
 |---|---|
-| `LLM_TEXT_PROVIDER` | `ollama` for local text analysis or `openai` for cloud analysis |
-| `LLM_IMAGE_PROVIDER` | `ollama` for local screenshot analysis or `openai` for cloud vision |
+| `LLM_TEXT_PROVIDER` | `ollama` for local text analysis, `openai` for API-key cloud analysis, or `codex` for local Codex OAuth |
+| `LLM_IMAGE_PROVIDER` | `ollama` for local screenshot analysis, `openai` for API-key cloud vision, or `codex` for local Codex OAuth |
 | `OPENAI_API_KEY` | Optional key for OpenAI cloud analysis |
+| `CODEX_MODEL` | Optional Codex model override; leave empty to use the Codex default |
 | `OLLAMA_BASE_URL` | Local Ollama server URL, usually `http://localhost:11434` |
 | `STT_PROVIDER` | `auto`, `local`, or `xai` speech-to-text backend |
 | `XAI_API_KEY` | Optional key for xAI cloud speech-to-text |

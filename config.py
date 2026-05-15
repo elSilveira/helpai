@@ -22,6 +22,7 @@ LLM_IMAGE_PROVIDER = (_user.get("LLM_IMAGE_PROVIDER") or os.environ.get("LLM_IMA
 OPENAI_API_KEY = _user.get("OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY", "")
 OPENAI_TEXT_MODEL = _user.get("OPENAI_TEXT_MODEL") or os.environ.get("OPENAI_TEXT_MODEL", "gpt-4o")
 OPENAI_IMAGE_MODEL = _user.get("OPENAI_IMAGE_MODEL") or os.environ.get("OPENAI_IMAGE_MODEL", "gpt-4o")
+CODEX_MODEL = _user.get("CODEX_MODEL") or os.environ.get("CODEX_MODEL", "")
 OLLAMA_BASE_URL = (_user.get("OLLAMA_BASE_URL") or os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")).rstrip("/")
 OLLAMA_TEXT_MODEL = _user.get("OLLAMA_TEXT_MODEL") or os.environ.get("OLLAMA_TEXT_MODEL", "qwen3:8b")
 OLLAMA_IMAGE_MODEL = _user.get("OLLAMA_IMAGE_MODEL") or os.environ.get("OLLAMA_IMAGE_MODEL", "gemma3:12b")
