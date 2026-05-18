@@ -1,5 +1,6 @@
 import unittest
 
+import codex_client
 from codex_client import CodexAuthError, CodexClient
 
 
@@ -32,6 +33,14 @@ class FakeTransport:
         if not self.notifications:
             raise TimeoutError("no notifications")
         return self.notifications.pop(0)
+
+
+class FailingInitializeTransport(FakeTransport):
+    def request(self, method, params=None, timeout=None):
+        self.calls.append((method, params or {}))
+        if method == "initialize":
+            raise TimeoutError("initialize timed out")
+        return {}
 
 
 class CodexClientTests(unittest.TestCase):
@@ -155,6 +164,52 @@ class CodexClientTests(unittest.TestCase):
 
         self.assertEqual(login["authUrl"], "https://example.com/auth")
         self.assertIn(("account/login/start", {"type": "chatgpt"}), transport.calls)
+
+    def test_warmup_initializes_transport_without_starting_turn(self):
+        transport = FakeTransport()
+        client = CodexClient(transport_factory=lambda: transport)
+
+        client.warmup()
+
+        self.assertTrue(transport.started)
+        self.assertEqual(transport.calls, [("initialize", {
+            "clientInfo": {
+                "name": "helpai",
+                "title": "HelpAI",
+                "version": codex_client.APP_VERSION,
+            },
+            "capabilities": {"experimentalApi": True},
+        })])
+        self.assertEqual(transport.notifies, [("initialized", {})])
+
+    def test_close_default_client_closes_and_resets_shared_client(self):
+        class FakeDefaultClient:
+            def __init__(self):
+                self.closed = False
+
+            def close(self):
+                self.closed = True
+
+        fake_client = FakeDefaultClient()
+        original_default = codex_client._default_client
+        try:
+            codex_client._default_client = fake_client
+
+            codex_client.close_default_client()
+
+            self.assertTrue(fake_client.closed)
+            self.assertIsNone(codex_client._default_client)
+        finally:
+            codex_client._default_client = original_default
+
+    def test_failed_warmup_closes_uninitialized_transport(self):
+        transport = FailingInitializeTransport()
+        client = CodexClient(transport_factory=lambda: transport)
+
+        with self.assertRaises(TimeoutError):
+            client.warmup()
+
+        self.assertTrue(transport.closed)
 
 
 if __name__ == "__main__":

@@ -496,6 +496,7 @@ class OverlayApp:
         self.on_quit: callable = lambda: None
         self.on_settings: callable = lambda: None
         self.on_clear_conversation: callable = lambda: None
+        self.on_clear_context: callable = lambda: None
         self.on_context_key_toggle: callable = lambda key, active: None
         self.on_auto_whisper_toggle: callable = lambda enabled: None
 
@@ -634,8 +635,15 @@ class OverlayApp:
     #  Panel Factory
     # ═══════════════════════════════════════════════════════════════════
 
-    def _create_panel(self, title: str, accent: str, pos_x: int, pos_y: int,
-                      clear_btn: bool = False) -> tuple:
+    def _create_panel(
+        self,
+        title: str,
+        accent: str,
+        pos_x: int,
+        pos_y: int,
+        clear_btn: bool = False,
+        clear_tooltip: str = "Clear transcript",
+    ) -> tuple:
         """Create a panel Toplevel and return (panel, text_widget, close_w, clear_w)."""
         panel = tk.Toplevel(self.root)
         panel.title(title)
@@ -685,7 +693,7 @@ class OverlayApp:
             clear_w.pack(side=tk.RIGHT, padx=(0, 2))
             clear_w.bind("<Enter>", lambda e: clear_w.config(fg=_PEACH))
             clear_w.bind("<Leave>", lambda e: clear_w.config(fg=_SURFACE2))
-            _add_tooltip(clear_w, "Clear transcript")
+            _add_tooltip(clear_w, clear_tooltip)
 
         _make_draggable(panel, title_frame, title_label)
 
@@ -753,7 +761,7 @@ class OverlayApp:
             return
         panel, text_w, close_w, clear_w = self._create_panel(
             "Conversation", _GREEN,
-            pos_x=10, pos_y=40, clear_btn=True,
+            pos_x=10, pos_y=40, clear_btn=True, clear_tooltip="Clear transcript",
         )
         self._conv_panel = panel
         self._conv_text = text_w
@@ -1084,9 +1092,9 @@ class OverlayApp:
             return
         screen_w = self.root.winfo_screenwidth()
         insight_x = (screen_w - OVERLAY_WIDTH) // 2
-        panel, text_w, close_w, _ = self._create_panel(
+        panel, text_w, close_w, clear_w = self._create_panel(
             "Insight", _ACCENT,
-            pos_x=insight_x, pos_y=40, clear_btn=False,
+            pos_x=insight_x, pos_y=40, clear_btn=True, clear_tooltip="Clear context",
         )
         self._insight_panel = panel
         self._insight_text = text_w
@@ -1094,10 +1102,16 @@ class OverlayApp:
         self._insight_user_scrolled = False
         self._insight_last_len = 0
         close_w.bind("<Button-1>", lambda _: self.toggle_insight())
+        if clear_w:
+            clear_w.bind("<Button-1>", lambda _: self.clear_insight_context())
         # Detect manual scrolling
         text_w.bind("<MouseWheel>", self._on_insight_scroll)
         text_w.bind("<Button-4>", self._on_insight_scroll)   # Linux scroll up
         text_w.bind("<Button-5>", self._on_insight_scroll)   # Linux scroll down
+
+    def clear_insight_context(self) -> None:
+        """Forget prior insight context while keeping the visible answer."""
+        self.on_clear_context()
 
     def toggle_insight(self) -> None:
         self._ensure_insight_panel()

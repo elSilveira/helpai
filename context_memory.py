@@ -33,6 +33,10 @@ class ContextMemory:
         if len(self.entries) > self.max_entries:
             self.entries = self.entries[-self.max_entries:]
 
+    def clear(self) -> None:
+        """Forget all saved exchanges so future analysis starts fresh."""
+        self.entries.clear()
+
     def latest_exchange(self) -> tuple[str, str] | None:
         """Return the latest saved request/response pair."""
         if not self.entries:

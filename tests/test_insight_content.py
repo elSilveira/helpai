@@ -57,6 +57,13 @@ class InsightContentTests(unittest.TestCase):
             "insight_history_3",
         ])
 
+    def test_overlay_exposes_clear_context_action_from_insight_panel(self):
+        source = inspect.getsource(overlay.OverlayApp)
+
+        self.assertIn("on_clear_context", source)
+        self.assertIn("clear_insight_context", source)
+        self.assertIn("Clear context", source)
+
 
 if __name__ == "__main__":
     unittest.main()

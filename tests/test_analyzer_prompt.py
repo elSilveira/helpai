@@ -31,8 +31,10 @@ class AnalyzerPromptTests(unittest.TestCase):
     def test_analyze_text_accepts_recent_context_memory(self):
         fake_client = FakeTextClient()
         original_get_text_client = analyzer._get_text_client
+        original_provider = analyzer.LLM_TEXT_PROVIDER
 
         try:
+            analyzer.LLM_TEXT_PROVIDER = "openai"
             analyzer._get_text_client = lambda: fake_client
             analyzer.analyze_text(
                 "new question",
@@ -40,6 +42,7 @@ class AnalyzerPromptTests(unittest.TestCase):
             )
         finally:
             analyzer._get_text_client = original_get_text_client
+            analyzer.LLM_TEXT_PROVIDER = original_provider
 
         messages = fake_client.create_kwargs["messages"]
         self.assertEqual(messages[-1]["content"], "new question")
@@ -53,8 +56,10 @@ class AnalyzerPromptTests(unittest.TestCase):
     def test_analyze_transcript_forwards_recent_context_memory(self):
         fake_client = FakeTextClient()
         original_get_text_client = analyzer._get_text_client
+        original_provider = analyzer.LLM_TEXT_PROVIDER
 
         try:
+            analyzer.LLM_TEXT_PROVIDER = "openai"
             analyzer._get_text_client = lambda: fake_client
             analyzer.analyze_transcript(
                 "",
@@ -63,6 +68,7 @@ class AnalyzerPromptTests(unittest.TestCase):
             )
         finally:
             analyzer._get_text_client = original_get_text_client
+            analyzer.LLM_TEXT_PROVIDER = original_provider
 
         messages = fake_client.create_kwargs["messages"]
         self.assertTrue(

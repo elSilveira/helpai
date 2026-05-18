@@ -180,6 +180,9 @@ Most options can be changed in the settings UI. Advanced users can also edit
 | `TRANSCRIPTION_INTERVAL` | Seconds between rolling background transcriptions |
 | `HOTKEY_*` | Keyboard shortcuts |
 
+The default clear-context shortcut is `ctrl+shift+x`; it clears saved model
+context and prior insight history without clearing the visible transcript.
+
 ## Security & Privacy Details
 
 - HelpAI has no built-in telemetry, analytics, tracking, ads, or license checks.

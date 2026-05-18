@@ -831,6 +831,7 @@ class SettingsWindow:
         self._hotkey_row(card, "Screenshot Analysis", "HOTKEY_SCREENSHOT_FEEDBACK", f)
         self._hotkey_row(card, "Quick Text Input", "HOTKEY_QUICK_INPUT", f)
         self._hotkey_row(card, "Show / Hide Overlay", "HOTKEY_SHOW_CONVERSATION", f)
+        self._hotkey_row(card, "Clear Context", "HOTKEY_CLEAR_CONTEXT", f)
 
     def _build_appearance_panel(self):
         p = self._make_panel("appearance")

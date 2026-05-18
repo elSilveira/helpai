@@ -54,6 +54,16 @@ class ContextMemoryTests(unittest.TestCase):
         self.assertEqual(memory.latest_exchange(), None)
         self.assertEqual(memory.build_context_block(), "")
 
+    def test_clear_removes_all_saved_context(self):
+        memory = ContextMemory(max_entries=3, max_chars=10_000)
+        memory.add("audio", "old request", "old response")
+
+        memory.clear()
+
+        self.assertEqual(memory.latest_exchange(), None)
+        self.assertEqual(memory.recent_entries(), [])
+        self.assertEqual(memory.build_context_block(), "")
+
 
 if __name__ == "__main__":
     unittest.main()

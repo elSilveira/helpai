@@ -208,6 +208,10 @@ class CodexClient:
         self._transport = None
         self._initialized = False
 
+    def warmup(self) -> None:
+        """Start and initialize the Codex app-server without sending a model turn."""
+        self._ensure_initialized()
+
     def is_available(self) -> bool:
         return find_codex_executable() is not None
 
@@ -280,21 +284,25 @@ class CodexClient:
         if self._initialized:
             return
         self._transport = self._transport_factory()
-        self._transport.start()
-        self._transport.request(
-            "initialize",
-            {
-                "clientInfo": {
-                    "name": "helpai",
-                    "title": "HelpAI",
-                    "version": APP_VERSION,
+        try:
+            self._transport.start()
+            self._transport.request(
+                "initialize",
+                {
+                    "clientInfo": {
+                        "name": "helpai",
+                        "title": "HelpAI",
+                        "version": APP_VERSION,
+                    },
+                    "capabilities": {"experimentalApi": True},
                 },
-                "capabilities": {"experimentalApi": True},
-            },
-            timeout=30.0,
-        )
-        self._transport.notify("initialized", {})
-        self._initialized = True
+                timeout=30.0,
+            )
+            self._transport.notify("initialized", {})
+            self._initialized = True
+        except Exception:
+            self.close()
+            raise
 
     def _ensure_chatgpt_auth(self) -> None:
         account_response = self.get_account(refresh_token=True)
@@ -345,3 +353,18 @@ def get_default_client() -> CodexClient:
     if _default_client is None:
         _default_client = CodexClient()
     return _default_client
+
+
+def warm_default_client() -> None:
+    """Start the shared Codex app-server client for app-lifetime reuse."""
+    get_default_client().warmup()
+
+
+def close_default_client() -> None:
+    """Close and reset the shared Codex app-server client."""
+    global _default_client
+    if _default_client is not None:
+        try:
+            _default_client.close()
+        finally:
+            _default_client = None

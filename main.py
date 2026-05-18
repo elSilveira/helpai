@@ -23,12 +23,14 @@ from auto_whisper import (
     AUTO_WHISPER_IDLE_RETRY_SECONDS,
     AutoWhisperState,
 )
+from codex_client import close_default_client, warm_default_client
 from context_memory import ContextMemory
 from audio_capture import ContinuousCapture, check_audio_available
 from config import (
     AUDIO_CAPTURE_ENABLED,
     AUDIO_SOURCE,
     HOTKEY_AUDIO_ANALYSIS,
+    HOTKEY_CLEAR_CONTEXT,
     HOTKEY_QUICK_INPUT,
     HOTKEY_SCREENSHOT_FEEDBACK,
     HOTKEY_SHOW_CONVERSATION,
@@ -146,6 +148,16 @@ def _get_recent_context() -> str:
 def _save_exchange(request_text: str, response_text: str, kind: str = "conversation") -> None:
     """Store a bounded exchange for continuity (no extra API call)."""
     _context_memory.add(kind, request_text, response_text)
+
+
+def _clear_context_memory() -> None:
+    """Forget prior analysis context so the next request starts fresh."""
+    global _auto_whisper_state
+    _context_memory.clear()
+    _auto_whisper_state = AutoWhisperState()
+    logger.info("Context memory cleared by user.")
+    if app:
+        app.set_status("Context cleared")
 
 
 def _get_previous_response_history(current_response: str, limit: int = 3) -> list[str]:
@@ -598,9 +610,12 @@ def _quit_app() -> None:
         # 4. Unload Ollama models from GPU / kill process
         _cleanup_ollama()
 
+        # 5. Stop the shared Codex app-server process, if it was started.
+        close_default_client()
+
         logger.info("HelpAI stopped by user.")
 
-        # 5. Force-terminate the process to kill any lingering daemon threads
+        # 6. Force-terminate the process to kill any lingering daemon threads
         os._exit(0)
 
     # Hide the main overlay immediately, run cleanup in background
@@ -755,6 +770,14 @@ def main() -> None:
             else:
                 logger.warning("Ollama provider selected but ollama not found on PATH.")
 
+        if LLM_TEXT_PROVIDER == "codex" or LLM_IMAGE_PROVIDER == "codex":
+            splash.set_status("Starting Codex service...")
+            try:
+                warm_default_client()
+                logger.info("Codex app-server warmed and ready.")
+            except Exception:
+                logger.exception("Codex app-server warmup failed.")
+
         # Start audio capture
         if AUDIO_CAPTURE_ENABLED and check_audio_available():
             splash.set_status("Starting audio capture…")
@@ -799,6 +822,7 @@ def main() -> None:
     app.on_quit = _quit_app
     app.on_settings = _open_settings
     app.on_clear_conversation = _clear_transcript
+    app.on_clear_context = _clear_context_memory
     app.on_auto_whisper_toggle = _set_auto_whisper_enabled
     app.set_status(audio_status if capture else "Ready")
     app.root.after(0, _refresh_audio_levels)
@@ -820,6 +844,7 @@ def main() -> None:
     keyboard.add_hotkey(HOTKEY_SCREENSHOT_FEEDBACK, on_screenshot_hotkey, suppress=False)
     keyboard.add_hotkey(HOTKEY_QUICK_INPUT, on_quick_input_hotkey, suppress=False)
     keyboard.add_hotkey(HOTKEY_SHOW_CONVERSATION, lambda: app.schedule(app.toggle_conversation), suppress=False)
+    keyboard.add_hotkey(HOTKEY_CLEAR_CONTEXT, lambda: app.schedule(_clear_context_memory), suppress=False)
     logger.info("Global hotkeys registered.")
 
     # Run the tkinter main loop (blocking)

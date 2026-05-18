@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import analyzer
 from auto_whisper import (
     AUTO_WHISPER_COOLDOWN_SECONDS,
+    AUTO_WHISPER_DEBOUNCE_SECONDS,
     AUTO_WHISPER_MIN_NEW_CHARS,
     AutoWhisperState,
     build_auto_whisper_request,
@@ -27,6 +28,9 @@ class FakeCapture:
 
 
 class AutoWhisperTests(unittest.TestCase):
+    def test_auto_whisper_debounce_delay_is_two_seconds(self):
+        self.assertEqual(AUTO_WHISPER_DEBOUNCE_SECONDS, 2.0)
+
     def test_reads_transcript_without_clearing_context(self):
         capture = FakeCapture(output_text="First paragraph.\nSecond paragraph.")
         state = AutoWhisperState()
@@ -101,8 +105,10 @@ class AutoWhisperTests(unittest.TestCase):
     def test_auto_whisper_keeps_newest_recent_context_when_bounded(self):
         fake_client = FakeTextClient()
         original_get_text_client = analyzer._get_text_client
+        original_provider = analyzer.LLM_TEXT_PROVIDER
 
         try:
+            analyzer.LLM_TEXT_PROVIDER = "openai"
             analyzer._get_text_client = lambda: fake_client
             analyzer.analyze_auto_whisper(
                 "current transcript",
@@ -110,6 +116,7 @@ class AutoWhisperTests(unittest.TestCase):
             )
         finally:
             analyzer._get_text_client = original_get_text_client
+            analyzer.LLM_TEXT_PROVIDER = original_provider
 
         messages = fake_client.create_kwargs["messages"]
         context_messages = [
@@ -123,8 +130,10 @@ class AutoWhisperTests(unittest.TestCase):
     def test_auto_whisper_keeps_newest_last_exchange_when_bounded(self):
         fake_client = FakeTextClient()
         original_get_text_client = analyzer._get_text_client
+        original_provider = analyzer.LLM_TEXT_PROVIDER
 
         try:
+            analyzer.LLM_TEXT_PROVIDER = "openai"
             analyzer._get_text_client = lambda: fake_client
             analyzer.analyze_auto_whisper(
                 "current transcript",
@@ -135,6 +144,7 @@ class AutoWhisperTests(unittest.TestCase):
             )
         finally:
             analyzer._get_text_client = original_get_text_client
+            analyzer.LLM_TEXT_PROVIDER = original_provider
 
         messages = fake_client.create_kwargs["messages"]
         self.assertIn("LATEST_REQUEST_TAIL", messages[1]["content"])

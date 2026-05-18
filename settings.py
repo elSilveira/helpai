@@ -46,6 +46,7 @@ DEFAULTS = {
     "HOTKEY_SCREENSHOT_FEEDBACK": "ctrl+shift+e",
     "HOTKEY_QUICK_INPUT": "ctrl+shift+enter",
     "HOTKEY_SHOW_CONVERSATION": "ctrl+shift+s",
+    "HOTKEY_CLEAR_CONTEXT": "ctrl+shift+x",
     "AUDIO_CAPTURE_ENABLED": True,
     "SCREENSHOT_FEEDBACK_ENABLED": True,
     "STEALTH_MODE": True,
