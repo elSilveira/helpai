@@ -28,6 +28,16 @@ class AnalyzerPromptTests(unittest.TestCase):
         self.assertIn("THEN provide", prompt)
         self.assertIn("THEN explain why", prompt)
 
+    def test_vision_prompt_preserves_screenshot_continuity_and_file_boundaries(self):
+        prompt = analyzer.VISION_PROMPT
+
+        self.assertIn("cumulative screen-reading task", prompt)
+        self.assertIn("Do not treat the latest screenshot as the full context", prompt)
+        self.assertIn("continue from the previous screenshot context", prompt)
+        self.assertIn("clear context", prompt)
+        self.assertIn("separate sections for each file", prompt)
+        self.assertIn("Final File Checklist", prompt)
+
     def test_analyze_text_accepts_recent_context_memory(self):
         fake_client = FakeTextClient()
         original_get_text_client = analyzer._get_text_client
@@ -77,6 +87,42 @@ class AnalyzerPromptTests(unittest.TestCase):
                 for message in messages
             )
         )
+
+    def test_analyze_screenshot_forwards_full_recent_context(self):
+        fake_client = FakeTextClient()
+        original_get_image_client = analyzer._get_image_client
+        original_provider = analyzer.LLM_IMAGE_PROVIDER
+        original_prepare_vision_views = analyzer.prepare_vision_views
+        long_context = "SCREEN_CONTEXT_START " + ("folder/api/model/view/controller " * 400) + "SCREEN_CONTEXT_END"
+
+        try:
+            analyzer.LLM_IMAGE_PROVIDER = "openai"
+            analyzer._get_image_client = lambda: fake_client
+            analyzer.prepare_vision_views = lambda _image_bytes: [
+                {
+                    "bytes": b"fake-png",
+                    "mime_type": "image/png",
+                    "label": "full screen",
+                    "width": 100,
+                    "height": 50,
+                }
+            ]
+            analyzer.analyze_screenshot(b"original", recent_context=long_context)
+        finally:
+            analyzer._get_image_client = original_get_image_client
+            analyzer.LLM_IMAGE_PROVIDER = original_provider
+            analyzer.prepare_vision_views = original_prepare_vision_views
+
+        messages = fake_client.create_kwargs["messages"]
+        text_parts = [
+            item["text"]
+            for item in messages[0]["content"]
+            if item.get("type") == "text"
+        ]
+        joined_text = "\n".join(text_parts)
+        self.assertIn("SCREEN_CONTEXT_START", joined_text)
+        self.assertIn("SCREEN_CONTEXT_END", joined_text)
+        self.assertIn(long_context, joined_text)
 
 
 class FakeTextClient:

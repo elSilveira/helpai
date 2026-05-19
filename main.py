@@ -82,6 +82,11 @@ _tray_icon: "pystray.Icon | None" = None
 
 # ── Conversation context ────────────────────────────────────────────────────
 _context_memory = ContextMemory(max_entries=10, max_chars=12000)
+_SCREENSHOT_CONTEXT_REQUEST = (
+    "Screenshot feedback request. Retain this screenshot response as continuing screen context "
+    "for later screenshots until the user explicitly chooses clear context. Use it to preserve "
+    "file, folder, layer, and code-boundary decisions across scrolling and multi-file tasks."
+)
 _auto_whisper_enabled: bool = False
 _auto_whisper_state = AutoWhisperState()
 _auto_whisper_timer: threading.Timer | None = None
@@ -405,7 +410,7 @@ def _action_screenshot_feedback() -> None:
             recent_context=_get_recent_context(),
             on_token=lambda t: app.schedule(app.set_insight, t),
         )
-        _save_exchange("Screenshot feedback request", result, kind="screenshot")
+        _save_exchange(_SCREENSHOT_CONTEXT_REQUEST, result, kind="screenshot")
         app.schedule(_set_insight_with_history, result)
     except Exception as exc:
         logger.exception("Screenshot analysis error")

@@ -16,6 +16,14 @@ class ClearContextShortcutTests(unittest.TestCase):
         self.assertIn("keyboard.add_hotkey(HOTKEY_CLEAR_CONTEXT", main_source)
         self.assertIn("_clear_context_memory", main_source)
 
+    def test_screenshot_context_is_saved_with_continuity_request(self):
+        root = Path(__file__).resolve().parents[1]
+        main_source = (root / "main.py").read_text(encoding="utf-8")
+
+        self.assertIn("_SCREENSHOT_CONTEXT_REQUEST", main_source)
+        self.assertIn("_save_exchange(_SCREENSHOT_CONTEXT_REQUEST, result, kind=\"screenshot\")", main_source)
+        self.assertNotIn("_save_exchange(\"Screenshot feedback request\", result, kind=\"screenshot\")", main_source)
+
 
 if __name__ == "__main__":
     unittest.main()

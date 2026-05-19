@@ -276,9 +276,24 @@ VISION_PROMPT = (
     "C#/.NET, SQL, Terraform, Docker, etc.). Your response MUST use that exact language "
     "and framework — never answer in a different language than what's shown on screen.\n\n"
     "Context rules:\n"
+    "- You are analyzing a cumulative screen-reading task. The screenshots are incremental "
+    "and may show different parts of the same problem. Do not treat the latest screenshot as "
+    "the full context.\n"
+    "- If prior screenshot context is provided, continue from the previous screenshot context "
+    "unless the user explicitly used clear context. Treat scrolling, new files, folders, "
+    "and adjacent code panels as the same task by default.\n"
+    "- Use the user's text, all previous screenshot summaries, extracted visible code, visible "
+    "file tree entries, previous generated insight/code, and the latest screenshot together.\n"
+    "- Merge all visible requirements and infer the complete set of affected files after the "
+    "latest screenshot. Preserve previous requirements unless the latest screenshot clearly "
+    "contradicts them.\n"
+    "- For multi-file or layered applications, keep container, API, model, view, controller, "
+    "middleware, and configuration code in separate sections for each file or folder where it belongs.\n"
     "- If there's code or a coding problem: FIRST explain my approach in bullet points, "
     "THEN provide a COMPLETE, working solution in the SAME language/framework shown on screen, "
     "with all imports and context, THEN explain why that solution fits the problem.\n"
+    "- Include a `## Final File Checklist` section that lists every visible, mentioned, inferred, "
+    "test-related, updated, created, inspected, and intentionally unchanged file.\n"
     "- If there's a question: lead with the definitive answer as bullet points, "
     "then explain the reasoning. Never restate the question.\n"
     "- If there's an error: name the root cause first in bullets, then my complete fix "
@@ -501,9 +516,11 @@ def analyze_screenshot(
             {
                 "type": "text",
                 "text": (
-                    "Previous screenshot/conversation context. Use it only if it is related "
-                    "to the current screen; ignore it if the screen has moved to a different task.\n\n"
-                    + recent_context[:6000]
+                    "Previous screenshot/conversation context. Continue from this context by default "
+                    "when the new screenshot appears to be the same task, a scrolled view, or another "
+                    "file in the same application. Only ignore it when it clearly conflicts with the "
+                    "current screen or the user has cleared context.\n\n"
+                    + recent_context
                 ),
             }
         )
