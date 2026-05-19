@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://elsilveira.github.io/helpai/sitemap.xml
+Sitemap: https://elsilveira.github.io/suapper/sitemap.xml

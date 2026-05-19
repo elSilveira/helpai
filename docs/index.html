@@ -5,48 +5,49 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta
       name="description"
-      content="HelpAI is a free open-source Windows AI overlay for local AI assistance, coding help, QA sessions, training, screenshot analysis, audio transcription, Ollama, and privacy-first workflows."
+      content="Suapper is a free open-source Windows AI overlay for local AI assistance, coding help, QA sessions, training, screenshot analysis, audio transcription, Codex OAuth, Ollama, and privacy-first workflows."
     />
     <meta
       name="keywords"
-      content="HelpAI, free AI overlay, open source AI assistant, Windows AI overlay, local AI assistant, Ollama UI, coding help, screenshot analysis, audio transcription, QA training tool, privacy-first AI, local LLM, faster-whisper"
+      content="Suapper, free AI overlay, open source AI assistant, Windows AI overlay, local AI assistant, Ollama UI, Codex OAuth, coding help, screenshot analysis, audio transcription, QA training tool, privacy-first AI, local LLM, faster-whisper"
     />
-    <meta name="author" content="HelpAI contributors" />
+    <meta name="author" content="Suapper contributors" />
     <meta name="robots" content="index, follow, max-image-preview:large" />
-    <link rel="canonical" href="https://elsilveira.github.io/helpai/" />
+    <link rel="canonical" href="https://elsilveira.github.io/suapper/" />
     <meta name="theme-color" content="#10131f" />
-    <title>HelpAI - Free Open Source AI Overlay</title>
+    <title>Suapper - Free Open Source AI Overlay</title>
     <meta property="og:type" content="website" />
-    <meta property="og:url" content="https://elsilveira.github.io/helpai/" />
-    <meta property="og:site_name" content="HelpAI" />
-    <meta property="og:title" content="HelpAI - Free Open Source AI Overlay" />
+    <meta property="og:url" content="https://elsilveira.github.io/suapper/" />
+    <meta property="og:site_name" content="Suapper" />
+    <meta property="og:title" content="Suapper - Free Open Source AI Overlay" />
     <meta
       property="og:description"
-      content="A free, open-source, local-first Windows AI overlay for coding help, QA sessions, screenshot analysis, audio transcription, and privacy-first workflows."
+      content="A free, open-source, local-first Windows AI overlay for live work, coding help, QA sessions, screenshot context, audio transcription, and optional Codex OAuth."
     />
-    <meta property="og:image" content="https://elsilveira.github.io/helpai/social-preview.svg" />
+    <meta property="og:image" content="https://elsilveira.github.io/suapper/social-preview.svg" />
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="HelpAI - Free Open Source AI Overlay" />
+    <meta name="twitter:title" content="Suapper - Free Open Source AI Overlay" />
     <meta
       name="twitter:description"
-      content="Free open-source Windows AI overlay for local AI assistance, coding help, screenshots, audio transcription, and QA training."
+      content="Free open-source Windows AI overlay for local AI assistance, coding help, screenshots, audio transcription, and Codex OAuth."
     />
-    <meta name="twitter:image" content="https://elsilveira.github.io/helpai/social-preview.svg" />
+    <meta name="twitter:image" content="https://elsilveira.github.io/suapper/social-preview.svg" />
     <script type="application/ld+json">
       {
         "@context": "https://schema.org",
         "@type": "SoftwareApplication",
-        "name": "HelpAI",
+        "name": "Suapper",
         "applicationCategory": "DeveloperApplication",
         "operatingSystem": "Windows",
-        "url": "https://elsilveira.github.io/helpai/",
-        "codeRepository": "https://github.com/elSilveira/helpai",
-        "description": "HelpAI is a free open-source Windows AI overlay for local AI assistance, coding help, QA sessions, training, screenshot analysis, audio transcription, Ollama, and privacy-first workflows.",
+        "url": "https://elsilveira.github.io/suapper/",
+        "codeRepository": "https://github.com/elSilveira/suapper",
+        "description": "Suapper is a free open-source Windows AI overlay for local AI assistance, coding help, QA sessions, training, screenshot analysis, audio transcription, Codex OAuth, Ollama, and privacy-first workflows.",
         "keywords": [
           "free AI overlay",
           "open source AI assistant",
           "Windows AI overlay",
           "local AI assistant",
+          "Codex OAuth",
           "Ollama",
           "coding help",
           "screenshot analysis",
@@ -60,7 +61,7 @@
           "priceCurrency": "USD"
         },
         "isAccessibleForFree": true,
-        "license": "https://github.com/elSilveira/helpai"
+        "license": "https://github.com/elSilveira/suapper"
       }
     </script>
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
@@ -605,16 +606,17 @@
     <div id="root"></div>
     <script>
       const h = React.createElement;
-      const repoUrl = "https://github.com/elSilveira/helpai";
+      const repoUrl = "https://github.com/elSilveira/suapper";
 
       function Nav() {
         return h("header", { className: "shell nav" },
           h("a", { className: "brand", href: "#" },
-            h("span", { className: "mark" }, "H"),
-            h("span", null, "HelpAI")
+            h("span", { className: "mark" }, "S"),
+            h("span", null, "Suapper")
           ),
           h("nav", { className: "nav-links", "aria-label": "Primary" },
             h("a", { href: "#features" }, "Features"),
+            h("a", { href: "#providers" }, "Providers"),
             h("a", { href: "#privacy" }, "Privacy"),
             h("a", { href: "#setup" }, "Setup"),
             h("a", { href: repoUrl }, "GitHub")
@@ -623,7 +625,7 @@
       }
 
       function ProductPreview() {
-        return h("div", { className: "preview-wrap", "aria-label": "HelpAI overlay preview" },
+        return h("div", { className: "preview-wrap", "aria-label": "Suapper overlay preview" },
           h("div", { className: "desktop-frame" },
             h("div", { className: "wallpaper" }),
             h("div", { className: "panel conversation" },
@@ -640,7 +642,7 @@
             h("div", { className: "panel insights" },
               h("div", { className: "panel-title" }, h("span", { className: "pip" }), "Insights"),
               h("div", { className: "panel-body" },
-                h("p", { className: "insight-text" }, "Explain the approach first, then show the fix, then call out why it works."),
+                h("p", { className: "insight-text" }, "Use the live transcript, prior context, and current screen together. Keep the answer compact."),
                 h("div", { className: "line long" }),
                 h("div", { className: "line mid" }),
                 h("div", { className: "line short" })
@@ -651,7 +653,7 @@
               h("div", { className: "panel-body" },
                 h("pre", { className: "codeblock" },
                   h("span", { className: "token-a" }, "def "), "answer():\n",
-                  "    ", h("span", { className: "token-b" }, "return "), h("span", { className: "token-c" }, "\"ship the clear fix\"")
+                  "    ", h("span", { className: "token-b" }, "return "), h("span", { className: "token-c" }, "\"clear fix, separate panel\"")
                 )
               )
             ),
@@ -659,7 +661,7 @@
               h("span", { className: "bar-dot green" }, "C"),
               h("span", { className: "bar-dot blue" }, "I"),
               h("span", { className: "bar-dot cyan" }, "</>"),
-              h("span", { style: { color: "#9da8ba", fontSize: "12px", padding: "0 4px" } }, "Ready")
+              h("span", { style: { color: "#9da8ba", fontSize: "12px", padding: "0 4px" } }, "Context ready")
             )
           )
         );
@@ -669,9 +671,9 @@
         return h("main", { className: "shell hero" },
           h("div", null,
             h("span", { className: "eyebrow" }, "Free, open source, local-first"),
-            h("h1", null, "A quiet AI overlay for live work."),
+            h("h1", null, "Suapper"),
             h("p", { className: "hero-copy" },
-              "HelpAI sits on top of Windows, listens when you ask, reads screenshots when you need context, and keeps explanations separate from code so you can stay in the conversation."
+              "A quiet Windows AI overlay for live calls, QA reviews, training, and coding. It listens when you ask, reads screenshots when you need context, and keeps explanations separate from code."
             ),
             h("div", { className: "actions" },
               h("a", { className: "button primary", href: repoUrl }, "View on GitHub"),
@@ -679,7 +681,7 @@
             ),
             h("div", { className: "proof-row" },
               h("div", { className: "proof" }, h("strong", null, "Free to use"), h("span", null, "No app subscription or license server")),
-              h("div", { className: "proof" }, h("strong", null, "Open source"), h("span", null, "Public code, auditable behavior")),
+              h("div", { className: "proof" }, h("strong", null, "Context-aware"), h("span", null, "Transcript, screen, and prior answers stay connected")),
               h("div", { className: "proof" }, h("strong", null, "No telemetry"), h("span", null, "No tracking or analytics scripts"))
             )
           ),
@@ -689,20 +691,40 @@
 
       function FeatureGrid() {
         const features = [
-          ["Live conversation context", "Keep the transcript visible while HelpAI prepares concise responses you can use immediately."],
-          ["Screenshot feedback", "Capture the screen and get context-aware help for code, errors, diagrams, and product reviews."],
-          ["Separate code panel", "When code is generated, it opens in a dedicated overlay instead of interrupting the insight view."],
-          ["Local AI path", "Use Ollama and faster-whisper for a local-first workflow without sending work to a cloud model."],
-          ["Stealth overlay", "The HelpAI windows can be excluded from screen capture APIs to keep recordings clean."],
-          ["Configurable hotkeys", "Tune providers, models, opacity, shortcuts, audio capture, and screenshot analysis from settings."]
+          ["Auto whisper", "Generate compact live suggestions from the transcript without clearing the conversation buffer."],
+          ["Screenshot continuity", "Carry useful context across related screenshots, scrolling, and adjacent files until you clear it."],
+          ["Separate code panel", "Generated code opens in a dedicated overlay so the insight view stays readable."],
+          ["Clear Context", "Reset saved model context and prior insight history when the task changes."],
+          ["Capture-safe overlay", "Keep the overlay out of screen captures and recordings on supported Windows builds."],
+          ["Configurable workspace", "Tune providers, models, opacity, shortcuts, audio capture, STT, and screenshot analysis from settings."]
         ];
         return h("section", { id: "features", className: "shell" },
           h("div", { className: "section-head" },
-            h("h2", null, "Built for calls, reviews, and coding sessions."),
-            h("p", null, "The interface stays compact, direct, and useful while the work is happening.")
+            h("h2", null, "Built for live work without breaking focus."),
+            h("p", null, "Suapper keeps the interface compact while retaining the context that makes each answer useful.")
           ),
           h("div", { className: "grid" },
             features.map((item) => h("article", { className: "card", key: item[0] },
+              h("h3", null, item[0]),
+              h("p", null, item[1])
+            ))
+          )
+        );
+      }
+
+      function Providers() {
+        const providers = [
+          ["Local mode", "Use Ollama for text and vision with faster-whisper for speech-to-text when you want a local-first workflow."],
+          ["Codex OAuth", "Use your local Codex login through codex app-server instead of managing an OpenAI API key inside the app."],
+          ["Cloud optional", "OpenAI can handle text or screenshots, and xAI can handle speech-to-text when you configure those providers."]
+        ];
+        return h("section", { id: "providers", className: "shell" },
+          h("div", { className: "section-head" },
+            h("h2", null, "Choose the provider path that fits the session."),
+            h("p", null, "Mix local and cloud providers per capability. Suapper only sends content to a cloud provider when you configure and use one.")
+          ),
+          h("div", { className: "grid" },
+            providers.map((item) => h("article", { className: "card", key: item[0] },
               h("h3", null, item[0]),
               h("p", null, item[1])
             ))
@@ -717,11 +739,11 @@
               h("div", { className: "eyebrow" }, "Clear privacy model"),
               h("h2", { style: { margin: "18px 0 10px", fontSize: "38px", lineHeight: "1.05" } }, "Local by default when you choose local providers."),
               h("p", { style: { color: "#9da8ba", margin: 0 } },
-                "HelpAI does not add telemetry, analytics, ads, or app-side data collection. Cloud providers are optional and only receive content when you configure and use them."
+                "Suapper does not add telemetry, analytics, ads, or app-side data collection. Cloud providers are optional and only receive content when you configure and use them."
               )
             ),
             h("div", { className: "split-list" },
-              ["Free app with no built-in paid service", "Open-source code you can inspect", "Ollama and faster-whisper keep processing local", "OpenAI/xAI are optional cloud integrations"].map((text) =>
+              ["Free app with no built-in paid service", "Open-source code you can inspect", "Ollama and faster-whisper keep processing local", "OpenAI, xAI, and Codex are optional integrations"].map((text) =>
                 h("div", { className: "check", key: text }, h("i", null, "✓"), h("span", null, text))
               )
             )
@@ -731,15 +753,15 @@
 
       function Setup() {
         const steps = [
-          ["Clone", "Get the project locally.", "git clone https://github.com/elSilveira/helpai"],
+          ["Clone", "Get the project locally.", "git clone https://github.com/elSilveira/suapper"],
           ["Install", "Create a Python environment.", "pip install -r requirements.txt"],
           ["Local AI", "Pull an Ollama model.", "ollama pull qwen2.5:7b"],
-          ["Run", "Launch the overlay.", "python launcher.py"]
+          ["Run", "Launch Suapper.", "python launcher.py"]
         ];
         return h("section", { id: "setup", className: "shell" },
           h("div", { className: "section-head" },
             h("h2", null, "Start local, add cloud only if you want it."),
-            h("p", null, "Use Ollama for local AI, or configure OpenAI/xAI keys for cloud providers.")
+            h("p", null, "Use Ollama and faster-whisper locally, sign in with Codex OAuth, or configure OpenAI/xAI keys for cloud providers.")
           ),
           h("div", { className: "steps" },
             steps.map((step, index) => h("article", { className: "card", key: step[0] },
@@ -757,7 +779,7 @@
           h("div", { className: "cta" },
             h("div", null,
               h("h2", null, "Free, open source, and ready to inspect."),
-              h("p", null, "Use HelpAI locally, audit the code, and adapt it for your workflow.")
+              h("p", null, "Use Suapper locally, audit the code, and adapt it for your workflow. Real product screenshots can drop into this page when they are ready.")
             ),
             h("a", { className: "button primary", href: repoUrl }, "Open GitHub")
           )
@@ -769,10 +791,11 @@
           h(Nav),
           h(Hero),
           h(FeatureGrid),
+          h(Providers),
           h(Privacy),
           h(Setup),
           h(CTA),
-          h("footer", { className: "shell" }, "HelpAI is free open-source software. Cloud provider usage is optional and billed by those providers if configured.")
+          h("footer", { className: "shell" }, "Suapper is free open-source software. Cloud provider usage is optional and billed by those providers if configured.")
         );
       }
 

@@ -5,10 +5,10 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "helpai"
 dynamic = ["version"]
-description = "Internal QA and training overlay for audio, screenshot, and quick-input analysis on Windows."
+description = "Suapper is a local-first Windows AI overlay for audio, screenshot, and quick-input analysis."
 readme = "README.md"
 requires-python = ">=3.11"
-authors = [{ name = "HelpAI Team" }]
+authors = [{ name = "Suapper Team" }]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",

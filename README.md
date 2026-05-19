@@ -1,6 +1,6 @@
-# HelpAI - Free Local AI Overlay For QA, Training, And Coding Help
+# Suapper - Free Local AI Overlay For QA, Training, And Coding Help
 
-HelpAI is a lightweight Windows overlay for internal quality-assurance sessions,
+Suapper is a lightweight Windows overlay for internal quality-assurance sessions,
 UX evaluations, engineering training, and coding help. It can run fully locally
 with Ollama and local speech-to-text, so the app itself is free to use and does
 not include telemetry, analytics, tracking, ads, or app-side data collection.
@@ -9,14 +9,15 @@ not include telemetry, analytics, tracking, ads, or app-side data collection.
 
 - **Free app** - no subscription, license server, analytics, or built-in paid service.
 - **Local-first** - use Ollama for text/vision and faster-whisper for speech-to-text.
-- **No app telemetry** - HelpAI does not collect, sell, or train on your data.
-- **Cloud optional** - OpenAI and xAI are only used if you configure their API keys/providers.
+- **No app telemetry** - Suapper does not collect, sell, or train on your data.
+- **Provider choice** - use local Ollama, OpenAI API keys, xAI STT, or Codex OAuth.
+- **Context-aware help** - auto whisper and screenshots can reuse recent context until you clear it.
 - **Code-friendly output** - explanations and code are shown in separate overlay panels.
-- **Capture-safe overlay** - the HelpAI window is excluded from screenshots and recordings.
+- **Capture-safe overlay** - the Suapper window is excluded from screenshots and recordings.
 
 ## Privacy And Cost
 
-HelpAI itself is free software to run locally. If you choose local providers
+Suapper itself is free software to run locally. If you choose local providers
 (`Ollama` for AI and `local`/`auto` faster-whisper for speech-to-text), prompts,
 screenshots, audio transcription, and generated responses stay on your machine.
 
@@ -25,9 +26,10 @@ is sent to that provider over HTTPS:
 
 - OpenAI mode sends prompt text and/or screenshots to OpenAI for analysis.
 - xAI STT mode sends audio for speech-to-text.
+- Codex mode talks to your local `codex app-server` process and uses your Codex login.
 - Provider usage may cost money according to your OpenAI or xAI account.
 
-HelpAI does not add its own telemetry layer. Settings are stored locally, and
+Suapper does not add its own telemetry layer. Settings are stored locally, and
 audio is processed in memory rather than saved by the app.
 
 ## Features
@@ -35,11 +37,14 @@ audio is processed in memory rather than saved by the app.
 | Feature | Hotkey | Description |
 |---|---|---|
 | Audio Analysis | `Ctrl+Shift+D` | Uses microphone and/or system audio, transcribes with local faster-whisper or optional xAI STT, then generates QA insights |
-| Screenshot Feedback | `Ctrl+Shift+E` | Captures the screen, analyzes it with Ollama or OpenAI vision, and returns context-aware notes |
+| Screenshot Feedback | `Ctrl+Shift+E` | Captures the screen, analyzes it with Ollama, OpenAI, or Codex, and continues related screenshot context |
 | Quick Input | `Ctrl+Shift+Enter` | Opens a text prompt for ad-hoc questions or note logging |
+| Clear Context | `Ctrl+Shift+X` | Clears saved model context and prior insight history without clearing the visible transcript |
 
 - **Capture-excluded overlay** - uses `SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE)` so the overlay does not pollute screen recordings or broadcasts.
 - **Semi-transparent, draggable** - always-on-top borderless window positioned in the top-right corner.
+- **Auto whisper** - watches settled transcript text and produces compact suggestions without clearing the transcript.
+- **Separate code panel** - fenced code is split into its own overlay panel instead of interrupting the insight view.
 - **Configurable** - settings can be changed in the app or through `settings.json`.
 
 ## Prerequisites
@@ -49,12 +54,13 @@ audio is processed in memory rather than saved by the app.
 - For a free local setup: Ollama installed and running, plus local faster-whisper
 - Optional: an OpenAI API key for cloud text and screenshot analysis
 - Optional: an xAI API key for cloud speech-to-text
+- Optional: Codex CLI installed and signed in for Codex OAuth provider mode
 
 ## Setup
 
 ```powershell
 # Clone / navigate to the project
-cd helpai
+cd suapper
 
 # Create virtual environment
 python -m venv .venv
@@ -72,6 +78,9 @@ $env:OPENAI_API_KEY = "sk-..."
 
 # Optional: enable xAI speech-to-text
 $env:XAI_API_KEY = "xai-..."
+
+# Optional: sign in for Codex OAuth provider mode
+codex login
 ```
 
 ## Running
@@ -93,14 +102,14 @@ Or run the Python entry point directly through the virtual environment:
 The overlay window will appear on your primary monitor. Use the hotkeys above
 to interact.
 
-If you install the project as a Python package, launch it with:
+If you install the current compatibility package, launch it with:
 
 ```powershell
 helpai
 ```
 
 Speech-to-text selection defaults to `auto`: if `XAI_API_KEY` is present and
-xAI is selected, HelpAI can use xAI STT; otherwise it falls back to the local
+xAI is selected, Suapper can use xAI STT; otherwise it falls back to the local
 faster-whisper model.
 
 ## Build And Packaging
@@ -111,7 +120,7 @@ To build both the Windows executable bundle and a pip-installable package:
 .\build.bat
 ```
 
-That produces:
+That currently produces compatibility artifact names:
 
 - `dist\HelpAI\HelpAI.exe` for the existing Windows installer flow
 - `dist\pip\helpai-<version>-py3-none-any.whl` for `pip install`
@@ -138,13 +147,13 @@ For direct source installs during development:
 python -m pip install -e .
 ```
 
-Installed copies store `settings.json` in `%APPDATA%\HelpAI`, while repo and
+Installed copies currently store `settings.json` in `%APPDATA%\HelpAI`, while repo and
 PyInstaller builds keep settings next to the project or executable.
 
 ## Project Structure
 
 ```text
-helpai/
+suapper/
 |-- main.py             # Entry point: hotkey registration, action wiring
 |-- config.py           # Configuration loaded from settings/environment
 |-- settings.py         # Local settings storage
@@ -185,10 +194,10 @@ context and prior insight history without clearing the visible transcript.
 
 ## Security & Privacy Details
 
-- HelpAI has no built-in telemetry, analytics, tracking, ads, or license checks.
+- Suapper has no built-in telemetry, analytics, tracking, ads, or license checks.
 - Local Ollama/faster-whisper mode keeps processing on your machine.
 - Cloud provider mode only sends the content needed for the action you trigger.
-- Audio data is processed in memory and never written to disk by HelpAI.
+- Audio data is processed in memory and never written to disk by Suapper.
 - All provider API calls use HTTPS.
 - API keys can be stored in local settings or read from environment variables.
 - The `XAI_API_KEY` is optional and only used when the xAI STT backend is configured.
