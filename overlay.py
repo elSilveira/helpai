@@ -84,7 +84,11 @@ class InsightHistoryBlock:
     tag: str
 
 
-_FENCED_CODE_RE = re.compile(r"```[^\n`]*\n?(.*?)(?:```|$)", re.DOTALL)
+_FENCED_CODE_RE = re.compile(
+    r"(?P<label>(?:#{1,6}\s*File:\s*[^\n]+\n)?(?:This code is in `[^`\n]+`\.\n)?)"
+    r"```[^\n`]*\n?(?P<code>.*?)(?:```|$)",
+    re.DOTALL,
+)
 _INSIGHT_HISTORY_LIMIT = 4
 _INSIGHT_HISTORY_COLORS = {
     "insight_current": "#f8f8f2",
@@ -99,7 +103,12 @@ def split_insight_content(text: str) -> InsightContent:
     code_blocks: list[str] = []
 
     def _replace(match: re.Match[str]) -> str:
-        code_blocks.append(match.group(1).strip())
+        label = match.group("label").strip()
+        code = match.group("code").strip()
+        if label and code:
+            code_blocks.append(label + "\n\n" + code)
+        elif code:
+            code_blocks.append(code)
         return "\n\n"
 
     insights = _FENCED_CODE_RE.sub(_replace, text)
@@ -492,6 +501,7 @@ class OverlayApp:
         self.on_quick_input_submit: callable = lambda text: None
         self.on_audio: callable = lambda: None
         self.on_screenshot: callable = lambda: None
+        self.on_analyze_screenshots: callable = lambda: None
         self.on_stop: callable = lambda: None
         self.on_quit: callable = lambda: None
         self.on_settings: callable = lambda: None
@@ -531,6 +541,7 @@ class OverlayApp:
             f, text=" ✕ ",
             bg=_CRUST, fg=_SURFACE2,
             font=(OVERLAY_FONT_FAMILY, 10), cursor="hand2",
+            width=4, height=1, anchor=tk.CENTER, padx=0, pady=0,
         )
         quit_btn.pack(side=tk.RIGHT, padx=(0, 4))
         quit_btn.bind("<Button-1>", lambda _: self._do_quit())
@@ -543,6 +554,7 @@ class OverlayApp:
             f, text=" ⚙ ",
             bg=_CRUST, fg=_SUBTEXT,
             font=(OVERLAY_FONT_FAMILY, 10), cursor="hand2",
+            width=4, height=1, anchor=tk.CENTER, padx=0, pady=0,
         )
         settings_btn.pack(side=tk.RIGHT, padx=1)
         settings_btn.bind("<Button-1>", lambda _: self._do_settings())
@@ -556,6 +568,7 @@ class OverlayApp:
             bg=_SURFACE0 if _stealth_enabled else _CRUST,
             fg=_GREEN if _stealth_enabled else _SUBTEXT,
             font=(OVERLAY_FONT_FAMILY, 10), cursor="hand2",
+            width=4, height=1, anchor=tk.CENTER, padx=0, pady=0,
         )
         self._stealth_btn.pack(side=tk.RIGHT, padx=1)
         self._stealth_btn.bind("<Button-1>", lambda _: self.toggle_stealth())
@@ -593,6 +606,7 @@ class OverlayApp:
             f, text=" AW ",
             bg=_CRUST, fg=_SUBTEXT,
             font=(OVERLAY_FONT_FAMILY, 9), cursor="hand2",
+            width=4, height=1, anchor=tk.CENTER, padx=0, pady=0,
         )
         self._auto_whisper_btn.pack(side=tk.LEFT, padx=1)
         self._auto_whisper_btn.bind("<Button-1>", lambda _: self.toggle_auto_whisper())
@@ -601,9 +615,13 @@ class OverlayApp:
         _add_tooltip(self._auto_whisper_btn, "Auto Whisper")
 
         # Screenshot — camera icon
-        screen_btn = self._bar_icon_btn(f, "📷", _SUBTEXT, "Screenshot Analysis (Ctrl+E)")
+        screen_btn = self._bar_icon_btn(f, "📷", _SUBTEXT, "Save Screenshot (Ctrl+E)")
         screen_btn.pack(side=tk.LEFT, padx=1)
         screen_btn.bind("<Button-1>", lambda _: self.on_screenshot())
+
+        analyze_screens_btn = self._bar_icon_btn(f, " AS ", _SUBTEXT, "Analyze Screenshots")
+        analyze_screens_btn.pack(side=tk.LEFT, padx=1)
+        analyze_screens_btn.bind("<Button-1>", lambda _: self.on_analyze_screenshots())
 
         # Quick Input — keyboard icon
         input_btn = self._bar_icon_btn(f, "⌨", _SUBTEXT, "Quick Input (Ctrl+Shift+Enter)")
@@ -625,6 +643,7 @@ class OverlayApp:
             parent, text=f" {icon} ",
             bg=_CRUST, fg=fg_color,
             font=(OVERLAY_FONT_FAMILY, 10), cursor="hand2",
+            width=4, height=1, anchor=tk.CENTER, padx=0, pady=0,
         )
         btn.bind("<Enter>", lambda e, b=btn: b.config(fg=_TEXT, bg=_SURFACE0))
         btn.bind("<Leave>", lambda e, b=btn: b.config(fg=fg_color, bg=_CRUST))

@@ -23,6 +23,29 @@ class InsightContentTests(unittest.TestCase):
         self.assertEqual(content.code, "print('hello')")
         self.assertTrue(content.has_code)
 
+    def test_moves_file_marker_with_code_block_to_code_panel(self):
+        text = (
+            "First explain the approach.\n\n"
+            "#### File: app.py\n"
+            "This code is in `app.py`.\n"
+            "```python\n"
+            "print('hello')\n"
+            "```\n\n"
+            "Then explain why this works."
+        )
+
+        content = overlay.split_insight_content(text)
+
+        self.assertEqual(
+            content.insights,
+            "First explain the approach.\n\nThen explain why this works.",
+        )
+        self.assertEqual(
+            content.code,
+            "#### File: app.py\nThis code is in `app.py`.\n\nprint('hello')",
+        )
+        self.assertTrue(content.has_code)
+
     def test_overlay_uses_separate_code_panel_not_tabs(self):
         source = inspect.getsource(overlay.OverlayApp)
 

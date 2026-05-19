@@ -21,7 +21,8 @@ class ClearContextShortcutTests(unittest.TestCase):
         main_source = (root / "main.py").read_text(encoding="utf-8")
 
         self.assertIn("_SCREENSHOT_CONTEXT_REQUEST", main_source)
-        self.assertIn("_save_exchange(_SCREENSHOT_CONTEXT_REQUEST, result, kind=\"screenshot\")", main_source)
+        self.assertIn("request_text = _SCREENSHOT_CONTEXT_REQUEST", main_source)
+        self.assertIn("_save_exchange(request_text, result, kind=\"screenshot\")", main_source)
         self.assertNotIn("_save_exchange(\"Screenshot feedback request\", result, kind=\"screenshot\")", main_source)
 
 

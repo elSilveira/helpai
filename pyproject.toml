@@ -58,6 +58,7 @@ py-modules = [
     "main",
     "overlay",
     "screenshot",
+    "screenshot_batch",
     "settings",
     "settings_ui",
     "speech_to_text",

@@ -81,6 +81,33 @@ class ContextMemoryTests(unittest.TestCase):
         self.assertIn("search.py", block)
         self.assertIn("tests/test_search.py", block)
 
+    def test_screenshot_context_preserves_previous_file_change_code(self):
+        memory = ContextMemory(max_entries=10, max_chars=4_000)
+
+        memory.add(
+            "screenshot",
+            "Screenshot feedback request",
+            (
+                "## File Changes\n"
+                "### `search.py`\n"
+                "Change: update the Search class.\n"
+                "```python\n"
+                "class Search:\n"
+                "    def run(self):\n"
+                "        return 'updated'\n"
+                "```\n\n"
+                "## Final File Checklist\n"
+                "- `search.py` - change: update the Search class.\n"
+            ),
+        )
+
+        block = memory.build_context_block()
+
+        self.assertIn("Previous per-file changes from the latest screenshot response", block)
+        self.assertIn("search.py", block)
+        self.assertIn("class Search", block)
+        self.assertIn("change: update the Search class", block)
+
     def test_screenshot_context_can_start_new_task_from_explicit_signal(self):
         memory = ContextMemory(max_entries=10, max_chars=2_000)
         memory.add("screenshot", "Screenshot feedback request", "Visible file `old_task.py`.")

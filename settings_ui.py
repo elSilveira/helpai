@@ -74,6 +74,37 @@ _OLLAMA_MODELS = [
 _OLLAMA_ALL_MODELS   = [(lbl, val) for lbl, val, _   in _OLLAMA_MODELS]
 _OLLAMA_VISION_MODELS = [(lbl, val) for lbl, val, vis in _OLLAMA_MODELS if vis]
 
+_OPENAI_TEXT_MODELS = [
+    ("GPT-5.5  - newest GPT-5 option", "gpt-5.5"),
+    ("GPT-5.2  - strong coding/reasoning", "gpt-5.2"),
+    ("GPT-5.2 Chat  - ChatGPT-style", "gpt-5.2-chat-latest"),
+    ("GPT-5.1  - coding/reasoning", "gpt-5.1"),
+    ("GPT-5  - previous GPT-5", "gpt-5"),
+    ("GPT-5 mini  - faster, lower cost", "gpt-5-mini"),
+    ("GPT-5 nano  - fastest, lowest cost", "gpt-5-nano"),
+    ("GPT-4.1  - non-reasoning", "gpt-4.1"),
+    ("GPT-4.1 mini  - faster non-reasoning", "gpt-4.1-mini"),
+    ("GPT-4o  - legacy multimodal", "gpt-4o"),
+    ("GPT-4o mini  - cheap legacy multimodal", "gpt-4o-mini"),
+    ("o3  - reasoning", "o3"),
+    ("o4-mini  - fast reasoning", "o4-mini"),
+    ("o3-mini  - older small reasoning", "o3-mini"),
+]
+
+_OPENAI_IMAGE_MODELS = [
+    ("GPT-5.5  - newest GPT-5 option", "gpt-5.5"),
+    ("GPT-5.2  - strong vision reasoning", "gpt-5.2"),
+    ("GPT-5.2 Chat  - ChatGPT-style vision", "gpt-5.2-chat-latest"),
+    ("GPT-5.1  - vision capable", "gpt-5.1"),
+    ("GPT-5  - vision capable", "gpt-5"),
+    ("GPT-5 mini  - faster vision", "gpt-5-mini"),
+    ("GPT-5 nano  - fastest vision", "gpt-5-nano"),
+    ("GPT-4.1  - vision capable", "gpt-4.1"),
+    ("GPT-4.1 mini  - faster vision", "gpt-4.1-mini"),
+    ("GPT-4o  - legacy multimodal", "gpt-4o"),
+    ("GPT-4o mini  - cheap legacy multimodal", "gpt-4o-mini"),
+]
+
 
 def _query_ollama_models() -> set[str]:
     """Return the set of model ids currently pulled in Ollama (best-effort)."""
@@ -566,10 +597,12 @@ class SettingsWindow:
         # OpenAI card
         card = self._card(p, "OpenAI")
         self._text_row(card, "API Key", "OPENAI_API_KEY", f, show="•")
-        self._text_row(card, "Text Model", "OPENAI_TEXT_MODEL", f)
-        self._hint(card, "gpt-4o  ·  gpt-4o-mini  ·  o3-mini  ·  any text model")
-        self._text_row(card, "Image Model", "OPENAI_IMAGE_MODEL", f)
-        self._hint(card, "gpt-4o  ·  gpt-4o-mini  ·  gpt-4-turbo  (must support vision)")
+        self._combo_row(card, "Text Model", "OPENAI_TEXT_MODEL", f,
+                        _OPENAI_TEXT_MODELS, width=34, editable=True)
+        self._hint(card, "Editable dropdown - select a listed model or type another OpenAI text model id")
+        self._combo_row(card, "Image Model", "OPENAI_IMAGE_MODEL", f,
+                        _OPENAI_IMAGE_MODELS, width=34, editable=True)
+        self._hint(card, "Editable dropdown - use a model that supports image input for screenshots")
 
         # Ollama card
         card = self._card(p, "Ollama (Local)")
@@ -828,7 +861,8 @@ class SettingsWindow:
 
         card = self._card(p, "Actions")
         self._hotkey_row(card, "Analyze Conversation", "HOTKEY_AUDIO_ANALYSIS", f)
-        self._hotkey_row(card, "Screenshot Analysis", "HOTKEY_SCREENSHOT_FEEDBACK", f)
+        self._hotkey_row(card, "Save Screenshot", "HOTKEY_SCREENSHOT_FEEDBACK", f)
+        self._hotkey_row(card, "Analyze Saved Screenshots", "HOTKEY_ANALYZE_SCREENSHOTS", f)
         self._hotkey_row(card, "Quick Text Input", "HOTKEY_QUICK_INPUT", f)
         self._hotkey_row(card, "Show / Hide Overlay", "HOTKEY_SHOW_CONVERSATION", f)
         self._hotkey_row(card, "Clear Context", "HOTKEY_CLEAR_CONTEXT", f)
@@ -1262,7 +1296,16 @@ class SettingsWindow:
         spin.pack(side=tk.LEFT, padx=(4, 0), ipady=2)
         self._entries[key] = var
 
-    def _combo_row(self, parent: tk.Widget, label: str, key: str, font, options, width: int = 14):
+    def _combo_row(
+        self,
+        parent: tk.Widget,
+        label: str,
+        key: str,
+        font,
+        options,
+        width: int = 14,
+        editable: bool = False,
+    ):
         row = tk.Frame(parent, bg=_CARD)
         row.pack(fill=tk.X, pady=3)
         tk.Label(row, text=label, bg=_CARD, fg=_TEXT,
@@ -1272,7 +1315,7 @@ class SettingsWindow:
             label_to_value = {lbl: val for lbl, val in options}
             value_to_label = {val: lbl for lbl, val in options}
             current_value = self.data.get(key, options[0][1])
-            var = tk.StringVar(value=value_to_label.get(current_value, options[0][0]))
+            var = tk.StringVar(value=value_to_label.get(current_value, current_value))
             values = [lbl for lbl, _ in options]
             self._choice_maps[key] = label_to_value
         else:
@@ -1280,7 +1323,7 @@ class SettingsWindow:
             values = options
 
         combo = ttk.Combobox(
-            row, textvariable=var, values=values, state="readonly",
+            row, textvariable=var, values=values, state="normal" if editable else "readonly",
             width=width, font=font,
         )
         combo.pack(side=tk.LEFT, padx=(4, 0))
@@ -1326,13 +1369,22 @@ class SettingsWindow:
     def _collect(self) -> dict:
         result = dict(self.data)
         for key, widget in self._entries.items():
+            value = None
             if isinstance(widget, (tk.DoubleVar, tk.IntVar, tk.StringVar)):
-                if key in self._choice_maps:
-                    result[key] = self._choice_maps[key].get(widget.get(), "")
-                else:
-                    result[key] = widget.get()
+                value = widget.get()
             elif isinstance(widget, tk.Entry):
-                result[key] = widget.get().strip()
+                value = widget.get().strip()
+            elif hasattr(widget, "get"):
+                value = widget.get()
+
+            if value is None:
+                continue
+            if isinstance(value, str):
+                value = value.strip()
+            if key in self._choice_maps:
+                result[key] = self._choice_maps[key].get(value, value)
+            else:
+                result[key] = value
         return result
 
     def _save(self):

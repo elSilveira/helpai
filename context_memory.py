@@ -384,11 +384,12 @@ class ContextMemory:
         previous_checklist = session.previous_outputs.get("fileChecklist") or []
         if previous_insight or previous_code or previous_checklist:
             lines.append("")
-            lines.append("Previous outputs from the latest screenshot response:")
+            lines.append("Previous per-file changes from the latest screenshot response:")
+            lines.append("Continue from these file changes and repeat the actual change for each affected file when answering.")
             if previous_insight:
                 lines.append(f"- insight: {_clean_line(previous_insight, max_chars=700)}")
             if previous_code:
-                lines.append(f"- code: {_clean_line(previous_code, max_chars=700)}")
+                lines.append(f"- code/change snippet: {_clean_line(previous_code, max_chars=700)}")
             if isinstance(previous_checklist, list) and previous_checklist:
                 lines.append(f"- file checklist: {'; '.join(str(item) for item in previous_checklist)}")
 

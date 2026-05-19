@@ -44,6 +44,7 @@ SETTINGS_FILE = _base_dir / "settings.json"
 DEFAULTS = {
     "HOTKEY_AUDIO_ANALYSIS": "ctrl+shift+d",
     "HOTKEY_SCREENSHOT_FEEDBACK": "ctrl+shift+e",
+    "HOTKEY_ANALYZE_SCREENSHOTS": "ctrl+shift+a",
     "HOTKEY_QUICK_INPUT": "ctrl+shift+enter",
     "HOTKEY_SHOW_CONVERSATION": "ctrl+shift+s",
     "HOTKEY_CLEAR_CONTEXT": "ctrl+shift+x",

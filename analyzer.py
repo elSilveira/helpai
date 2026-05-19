@@ -102,10 +102,31 @@ def _get_image_model() -> str:
     return OLLAMA_IMAGE_MODEL if LLM_IMAGE_PROVIDER == "ollama" else OPENAI_IMAGE_MODEL
 
 
+def _is_reasoning_chat_model(model: str) -> bool:
+    """Return whether Chat Completions should avoid legacy sampling params."""
+    model = model.strip().lower()
+    return model.startswith(("gpt-5", "o1", "o3", "o4"))
+
+
+def _chat_completion_options(model: str, max_tokens: int, is_ollama: bool) -> dict:
+    """Build provider-compatible Chat Completions options."""
+    options = {"max_tokens": max_tokens} if is_ollama else {"max_completion_tokens": max_tokens}
+    if is_ollama or not _is_reasoning_chat_model(model):
+        options["temperature"] = 0.2
+    return options
+
+
 _THINK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
 _LAST_EXCHANGE_CONTEXT_CHARS = 4000
 _AUTO_WHISPER_RECENT_CONTEXT_CHARS = 8000
 _OMITTED_CONTEXT_MARKER = "[Earlier context omitted to keep the live whisper request bounded.]\n"
+_RECENT_CONTEXT_PREAMBLE = (
+    "Retained context remains valid unless the current request explicitly contradicts it. "
+    "The current request is the newest update appended after it. "
+    "If the current request reports a test result, failed case, hidden case, compile error, "
+    "runtime error, judge feedback, or passed/failed status, use that feedback to revise the "
+    "prior answer instead of restarting or repeating it."
+)
 
 
 def _strip_thinking(text: str) -> str:
@@ -127,6 +148,11 @@ def _keep_latest_context(text: str, max_chars: int) -> str:
     if available <= 0:
         return text[-max_chars:]
     return _OMITTED_CONTEXT_MARKER + text[-available:]
+
+
+def _format_recent_context(recent_context: str, max_chars: int) -> str:
+    """Wrap retained memory with continuity rules before the current request."""
+    return _RECENT_CONTEXT_PREAMBLE + "\n\n" + _keep_latest_context(recent_context, max_chars)
 
 
 # ── Response Profiles ───────────────────────────────────────────────────────
@@ -229,6 +255,12 @@ _VOICE_RULES = (
     "- Use bullets only when a list is materially easier to scan than short paragraphs.\n"
     "- When code is needed, explain the approach first, then provide the code, "
     "then explain why that approach is the right fit and only include gotchas that change the decision.\n"
+    "- If the previous code failed a test, compile error, runtime error, or judge case, "
+    "do not return the same solution unchanged. Identify the likely failure, change the algorithm "
+    "or implementation accordingly, and explain what changed.\n"
+    "- For coding problems, consider constraints before writing code and include the relevant "
+    "time complexity and space complexity. Check overflow and large integer handling; use BigInt "
+    "or arbitrary-precision integers when the target language and input range require it.\n"
     "- Correct factual errors clearly, but keep the correction compact.\n"
     "- End cleanly - land the thought without a recap or follow-up invitation.\n"
     "- Never say 'as an AI' or 'I'm an AI'. Never sound like a template. This IS my voice."
@@ -290,10 +322,15 @@ VISION_PROMPT = (
     "- For multi-file or layered applications, keep container, API, model, view, controller, "
     "middleware, and configuration code in separate sections for each file or folder where it belongs.\n"
     "- If there's code or a coding problem: FIRST explain my approach in bullet points, "
-    "THEN provide a COMPLETE, working solution in the SAME language/framework shown on screen, "
-    "with all imports and context, THEN explain why that solution fits the problem.\n"
+    "THEN provide a `## File Changes` section, THEN explain why that solution fits the problem.\n"
+    "- In `## File Changes`, include one subsection per affected file using `#### File: path` as the heading. "
+    "Immediately under each file heading, write `This code is in `path`.` before the code block or patch. "
+    "For each changed or created file, show the actual replacement code when the file is small or visible enough; "
+    "otherwise show a precise patch-style snippet with the surrounding before/after area. "
+    "Do not skip a file just because it was shown in prior screenshot context; repeat the actual change needed now.\n"
     "- Include a `## Final File Checklist` section that lists every visible, mentioned, inferred, "
-    "test-related, updated, created, inspected, and intentionally unchanged file.\n"
+    "test-related, updated, created, inspected, and intentionally unchanged file. "
+    "Mark each file as `change`, `create`, `inspect`, or `unchanged`, and keep it consistent with `## File Changes`.\n"
     "- If there's a question: lead with the definitive answer as bullet points, "
     "then explain the reasoning. Never restate the question.\n"
     "- If there's an error: name the root cause first in bullets, then my complete fix "
@@ -302,6 +339,79 @@ VISION_PROMPT = (
     "- NEVER ask the user questions back. Give the full answer upfront.\n\n"
     + _VOICE_RULES
 )
+
+
+SAVED_SCREENSHOT_BATCH_PROMPT = (
+    "Saved screenshot batch analysis. Return only the code-focused answer for the accumulated screenshots. "
+    "Do not give a broad screen summary. If code changes are needed, start with `## File Changes`; "
+    "for every affected file include `#### File: path`, `This code is in `path`.`, and the code block or patch. "
+    "Then include `## Final File Checklist`. If no code changes are needed, say that directly and list inspected files."
+)
+
+
+def _build_screenshot_content(
+    image_bytes_list: list[bytes],
+    recent_context: str | None = None,
+    *,
+    code_focused_batch: bool = False,
+) -> tuple[list[dict], int]:
+    content: list[dict] = [{"type": "text", "text": VISION_PROMPT}]
+    if code_focused_batch:
+        content.append({"type": "text", "text": SAVED_SCREENSHOT_BATCH_PROMPT})
+    if recent_context:
+        content.append(
+            {
+                "type": "text",
+                "text": (
+                    _RECENT_CONTEXT_PREAMBLE
+                    + "\n\n"
+                    "Previous screenshot/conversation context. Continue from this context by default "
+                    "when the new screenshot appears to be the same task, a scrolled view, or another "
+                    "file in the same application. Only ignore it when it clearly conflicts with the "
+                    "current screen or the user has cleared context.\n\n"
+                    + recent_context
+                ),
+            }
+        )
+
+    total_views = 0
+    for screenshot_index, image_bytes in enumerate(image_bytes_list, start=1):
+        views = prepare_vision_views(image_bytes)
+        total_views += len(views)
+        if len(views) > 1:
+            content.append(
+                {
+                    "type": "text",
+                    "text": (
+                        f"Screenshot {screenshot_index} image guide: view 1 is the full-screen overview. "
+                        "The remaining views are native-resolution crops ordered left-to-right, top-to-bottom."
+                    ),
+                }
+            )
+
+        for view_index, view in enumerate(views, start=1):
+            detail = "high" if len(views) == 1 or view_index > 1 else "low"
+            b64_image = base64.b64encode(view["bytes"]).decode("utf-8")
+            content.append(
+                {
+                    "type": "text",
+                    "text": (
+                        f"Screenshot {screenshot_index}, view {view_index}: "
+                        f"{view['label']} ({view['width']}x{view['height']})."
+                    ),
+                }
+            )
+            content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:{view['mime_type']};base64,{b64_image}",
+                        "detail": detail,
+                    },
+                }
+            )
+    return content, total_views
+
 
 def analyze_text(
     text: str,
@@ -344,7 +454,7 @@ def analyze_text(
         messages.append(
             {
                 "role": "system",
-                "content": _keep_latest_context(recent_context, _AUTO_WHISPER_RECENT_CONTEXT_CHARS),
+                "content": _format_recent_context(recent_context, _AUTO_WHISPER_RECENT_CONTEXT_CHARS),
             }
         )
 
@@ -360,12 +470,12 @@ def analyze_text(
     use_stream = on_token is not None
 
     try:
+        model = _get_model()
         response = client.chat.completions.create(
-            model=_get_model(),
+            model=model,
             messages=messages,
-            temperature=0.2,
-            max_tokens=max_tok,
             stream=use_stream,
+            **_chat_completion_options(model, max_tok, is_ollama),
         )
     except NotFoundError:
         model = _get_model()
@@ -438,7 +548,7 @@ def analyze_auto_whisper(
         messages.append(
             {
                 "role": "system",
-                "content": _keep_latest_context(recent_context, _AUTO_WHISPER_RECENT_CONTEXT_CHARS),
+                "content": _format_recent_context(recent_context, _AUTO_WHISPER_RECENT_CONTEXT_CHARS),
             }
         )
 
@@ -454,12 +564,12 @@ def analyze_auto_whisper(
     use_stream = on_token is not None
 
     try:
+        model = _get_model()
         response = client.chat.completions.create(
-            model=_get_model(),
+            model=model,
             messages=messages,
-            temperature=0.2,
-            max_tokens=max_tok,
             stream=use_stream,
+            **_chat_completion_options(model, max_tok, is_ollama),
         )
     except NotFoundError:
         model = _get_model()
@@ -509,51 +619,30 @@ def analyze_screenshot(
     recent_context: str | None = None,
 ) -> str:
     """Send a screenshot to the vision model and return insights."""
-    views = prepare_vision_views(image_bytes)
-    content: list[dict] = [{"type": "text", "text": VISION_PROMPT}]
-    if recent_context:
-        content.append(
-            {
-                "type": "text",
-                "text": (
-                    "Previous screenshot/conversation context. Continue from this context by default "
-                    "when the new screenshot appears to be the same task, a scrolled view, or another "
-                    "file in the same application. Only ignore it when it clearly conflicts with the "
-                    "current screen or the user has cleared context.\n\n"
-                    + recent_context
-                ),
-            }
-        )
+    return analyze_screenshots(
+        [image_bytes],
+        on_token=on_token,
+        recent_context=recent_context,
+        code_focused_batch=False,
+    )
 
-    if len(views) > 1:
-        content.append(
-            {
-                "type": "text",
-                "text": (
-                    "Image guide: image 1 is the full-screen overview. The remaining images are "
-                    "native-resolution crops ordered left-to-right, top-to-bottom."
-                ),
-            }
-        )
 
-    for index, view in enumerate(views, start=1):
-        detail = "high" if len(views) == 1 or index > 1 else "low"
-        b64_image = base64.b64encode(view["bytes"]).decode("utf-8")
-        content.append(
-            {
-                "type": "text",
-                "text": f"View {index}: {view['label']} ({view['width']}x{view['height']}).",
-            }
-        )
-        content.append(
-            {
-                "type": "image_url",
-                "image_url": {
-                    "url": f"data:{view['mime_type']};base64,{b64_image}",
-                    "detail": detail,
-                },
-            }
-        )
+def analyze_screenshots(
+    image_bytes_list: list[bytes],
+    on_token: "callable | None" = None,
+    recent_context: str | None = None,
+    *,
+    code_focused_batch: bool = True,
+) -> str:
+    """Send one or more screenshots to the vision model and return insights."""
+    if not image_bytes_list:
+        return "No saved screenshots to analyze."
+
+    content, total_views = _build_screenshot_content(
+        image_bytes_list,
+        recent_context=recent_context,
+        code_focused_batch=code_focused_batch,
+    )
 
     if LLM_IMAGE_PROVIDER == "codex":
         prompt_parts: list[str] = []
@@ -571,7 +660,11 @@ def analyze_screenshot(
             on_token=on_token,
             model=CODEX_MODEL or None,
         )
-        logger.info("Screenshot analysis complete via Codex using %d view(s).", len(views))
+        logger.info(
+            "Screenshot analysis complete via Codex using %d screenshot(s), %d view(s).",
+            len(image_bytes_list),
+            total_views,
+        )
         return _strip_thinking(codex_content).strip()
 
     client = _get_image_client()
@@ -580,16 +673,17 @@ def analyze_screenshot(
     use_stream = on_token is not None
 
     try:
+        model = _get_image_model()
         response = client.chat.completions.create(
-            model=_get_image_model(),
+            model=model,
             messages=[
                 {
                     "role": "user",
                     "content": content,
                 }
             ],
-            max_tokens=max_tok,
             stream=use_stream,
+            **_chat_completion_options(model, max_tok, is_ollama),
         )
     except NotFoundError:
         model = _get_image_model()
@@ -628,7 +722,11 @@ def analyze_screenshot(
         content = response.choices[0].message.content or ""
         content = _strip_thinking(content)
 
-    logger.info("Screenshot analysis complete using %d view(s).", len(views))
+        logger.info(
+            "Screenshot analysis complete using %d screenshot(s), %d view(s).",
+            len(image_bytes_list),
+            total_views,
+        )
     return content.strip()
 
 

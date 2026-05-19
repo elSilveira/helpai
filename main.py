@@ -17,7 +17,7 @@ import keyboard  # global hotkey library
 import pystray
 from PIL import Image, ImageDraw, ImageFont
 
-from analyzer import analyze_auto_whisper, analyze_screenshot, analyze_text, analyze_transcript
+from analyzer import analyze_auto_whisper, analyze_screenshots, analyze_text, analyze_transcript
 from auto_whisper import (
     AUTO_WHISPER_DEBOUNCE_SECONDS,
     AUTO_WHISPER_IDLE_RETRY_SECONDS,
@@ -29,6 +29,7 @@ from audio_capture import ContinuousCapture, check_audio_available
 from config import (
     AUDIO_CAPTURE_ENABLED,
     AUDIO_SOURCE,
+    HOTKEY_ANALYZE_SCREENSHOTS,
     HOTKEY_AUDIO_ANALYSIS,
     HOTKEY_CLEAR_CONTEXT,
     HOTKEY_QUICK_INPUT,
@@ -46,6 +47,7 @@ from config import (
 from local_transcriber import is_model_cached, preload_model
 from overlay import LoadingSplash, OverlayApp
 from screenshot import capture_full_screen
+from screenshot_batch import ScreenshotBatch
 from speech_to_text import describe_active_stt_provider, get_active_stt_provider, transcribe_audio_array
 from transcript_filters import format_transcript_paragraphs
 from visibility import exclude_from_taskbar
@@ -82,6 +84,7 @@ _tray_icon: "pystray.Icon | None" = None
 
 # ── Conversation context ────────────────────────────────────────────────────
 _context_memory = ContextMemory(max_entries=10, max_chars=12000)
+_screenshot_batch = ScreenshotBatch()
 _SCREENSHOT_CONTEXT_REQUEST = (
     "Screenshot feedback request. Retain this screenshot response as continuing screen context "
     "for later screenshots until the user explicitly chooses clear context. Use it to preserve "
@@ -159,6 +162,7 @@ def _clear_context_memory() -> None:
     """Forget prior analysis context so the next request starts fresh."""
     global _auto_whisper_state
     _context_memory.clear()
+    _screenshot_batch.clear()
     _auto_whisper_state = AutoWhisperState()
     logger.info("Context memory cleared by user.")
     if app:
@@ -368,14 +372,13 @@ def _action_audio_analysis() -> None:
         app.schedule(app.set_status, "Listening…")
 
 
-def _action_screenshot_feedback() -> None:
-    """Ctrl+E — capture screen, analyze with vision model, show insights."""
+def _action_save_screenshot() -> None:
+    """Ctrl+E - capture screen and save it for later batch analysis."""
     if not SCREENSHOT_FEEDBACK_ENABLED:
         app.schedule(app.set_insight, "Screenshot feedback is disabled in config.")
         return
 
-    app.schedule(app.set_status, "Capturing…")
-    loading_started = False
+    app.schedule(app.set_status, "Capturing screenshot...")
 
     try:
         # Hide overlay synchronously so it's not in the screenshot
@@ -397,31 +400,64 @@ def _action_screenshot_feedback() -> None:
         app.schedule(_do_show)
         show_done.wait(timeout=1.0)
 
-        loading_started = True
-        app.schedule(app.begin_loading, "Analyzing Screen")
-        app.schedule(app.set_status, "Analyzing…")
+        saved = _screenshot_batch.save(png)
+        app.schedule(app.set_status, f"Saved screenshot {_screenshot_batch.count}")
         app.schedule(
             app.set_insight,
-            "Analyzing Screen\n\nInspecting the captured screen and extracting the relevant context."
+            (
+                f"Saved screenshot {_screenshot_batch.count}\n\n"
+                f"Path: {saved.path}\n\n"
+                "Use Analyze Screenshots when the saved batch is ready."
+            ),
         )
+    except Exception as exc:
+        logger.exception("Screenshot save error")
+        app.schedule(app.show)
+        app.schedule(app.set_insight, f"Error: {exc}")
+    finally:
+        # Restore correct status based on capture state
+        if capture and capture.is_running:
+            app.schedule(app.set_status, f"Saved {_screenshot_batch.count} screenshot(s)")
+        else:
+            app.schedule(app.set_status, f"Saved {_screenshot_batch.count} screenshot(s)" if _screenshot_batch.count else "Ready")
 
-        result = analyze_screenshot(
-            png,
+
+def _action_analyze_saved_screenshots() -> None:
+    """Analyze the saved screenshot batch with the vision model."""
+    if not SCREENSHOT_FEEDBACK_ENABLED:
+        app.schedule(app.set_insight, "Screenshot feedback is disabled in config.")
+        return
+    if _screenshot_batch.count == 0:
+        app.schedule(app.set_insight, "No saved screenshots yet. Use Save Screenshot first.")
+        app.schedule(app.set_status, "No saved screenshots")
+        return
+
+    loading_started = True
+    app.schedule(app.show)
+    app.schedule(app.begin_loading, "Analyzing Screenshots")
+    app.schedule(app.set_status, f"Analyzing {_screenshot_batch.count} screenshot(s)...")
+    app.schedule(
+        app.set_insight,
+        f"Analyzing Screenshots\n\nSending {_screenshot_batch.count} saved screenshot(s) for code-focused analysis.",
+    )
+
+    try:
+        result = analyze_screenshots(
+            _screenshot_batch.image_bytes(),
             recent_context=_get_recent_context(),
             on_token=lambda t: app.schedule(app.set_insight, t),
         )
-        _save_exchange(_SCREENSHOT_CONTEXT_REQUEST, result, kind="screenshot")
+        request_text = _SCREENSHOT_CONTEXT_REQUEST + "\n\n" + _screenshot_batch.describe()
+        _save_exchange(request_text, result, kind="screenshot")
         app.schedule(_set_insight_with_history, result)
     except Exception as exc:
-        logger.exception("Screenshot analysis error")
-        app.schedule(app.show)
+        logger.exception("Saved screenshot analysis error")
         app.schedule(app.set_insight, f"Error: {exc}")
     finally:
         if loading_started:
             app.schedule(app.end_loading)
-        # Restore correct status based on capture state
         if capture and capture.is_running:
-            app.schedule(app.set_status, "Listening…")
+            app.schedule(app.set_status, "Listening...")
         else:
             app.schedule(app.set_status, "Ready")
 
@@ -463,7 +499,11 @@ def on_audio_hotkey() -> None:
 
 
 def on_screenshot_hotkey() -> None:
-    threading.Thread(target=_action_screenshot_feedback, daemon=True).start()
+    threading.Thread(target=_action_save_screenshot, daemon=True).start()
+
+
+def on_analyze_screenshots_hotkey() -> None:
+    threading.Thread(target=_action_analyze_saved_screenshots, daemon=True).start()
 
 
 def on_quick_input_hotkey() -> None:
@@ -823,6 +863,7 @@ def main() -> None:
     app.on_quick_input_submit = _action_quick_input_submit
     app.on_audio = on_audio_hotkey
     app.on_screenshot = on_screenshot_hotkey
+    app.on_analyze_screenshots = on_analyze_screenshots_hotkey
     app.on_stop = _stop_capture
     app.on_quit = _quit_app
     app.on_settings = _open_settings
@@ -847,6 +888,7 @@ def main() -> None:
     # Register global hotkeys
     keyboard.add_hotkey(HOTKEY_AUDIO_ANALYSIS, on_audio_hotkey, suppress=False)
     keyboard.add_hotkey(HOTKEY_SCREENSHOT_FEEDBACK, on_screenshot_hotkey, suppress=False)
+    keyboard.add_hotkey(HOTKEY_ANALYZE_SCREENSHOTS, on_analyze_screenshots_hotkey, suppress=False)
     keyboard.add_hotkey(HOTKEY_QUICK_INPUT, on_quick_input_hotkey, suppress=False)
     keyboard.add_hotkey(HOTKEY_SHOW_CONVERSATION, lambda: app.schedule(app.toggle_conversation), suppress=False)
     keyboard.add_hotkey(HOTKEY_CLEAR_CONTEXT, lambda: app.schedule(_clear_context_memory), suppress=False)
