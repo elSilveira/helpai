@@ -31,6 +31,17 @@ from speech_to_text import transcribe_wav_bytes
 
 logger = logging.getLogger(__name__)
 
+_OPENAI_TEXT_MAX_COMPLETION_TOKENS = 8192
+_OPENAI_IMAGE_MAX_COMPLETION_TOKENS = 16384
+_OLLAMA_TEXT_MAX_TOKENS = 2048
+_OLLAMA_IMAGE_MAX_TOKENS = 2048
+_AUTO_WHISPER_OPENAI_MAX_COMPLETION_TOKENS = 1024
+_AUTO_WHISPER_OLLAMA_MAX_TOKENS = 768
+_TRUNCATION_NOTICE = (
+    "[Output limit reached: the provider stopped before completing the response. "
+    "Run the request again with a narrower scope if the answer is missing the end.]"
+)
+
 # Separate clients for text and image providers (they may differ)
 _text_client: OpenAI | None = None
 _image_client: OpenAI | None = None
@@ -138,6 +149,21 @@ def _strip_thinking(text: str) -> str:
     return cleaned.strip()
 
 
+def _finish_reason_is_length(choice) -> bool:
+    """Return whether a Chat Completions choice stopped at the output cap."""
+    return getattr(choice, "finish_reason", None) == "length"
+
+
+def _append_truncation_notice(content: str) -> str:
+    """Make provider-side output truncation visible in the overlay."""
+    content = content.rstrip()
+    if _TRUNCATION_NOTICE in content:
+        return content
+    if content:
+        return f"{content}\n\n{_TRUNCATION_NOTICE}"
+    return _TRUNCATION_NOTICE
+
+
 def _keep_latest_context(text: str, max_chars: int) -> str:
     """Bound context while preserving the newest tail of the conversation."""
     text = text.strip()
@@ -242,6 +268,20 @@ def transcribe_audio(wav_bytes: bytes) -> str:
 
 # ── Shared voice & style rules ──────────────────────────────────────────────
 
+_CODING_DEPTH_RULES = (
+    "- For coding and code review, do a deeper pass before answering: separate direct evidence "
+    "from assumptions, and do not hide uncertainty when evidence conflicts or contradicts "
+    "a prior answer.\n"
+    "- Prefer actual code behavior, tests, logs, runtime errors, screenshots, and explicit "
+    "user constraints over guesses, naming hints, or conventional behavior.\n"
+    "- Prefer the broader rule that explains the failure over a local patch for the visible "
+    "example, but do not overengineer beyond the request.\n"
+    "- Check risk from large, repeated, malformed, partial, stale, or changed inputs before "
+    "calling the solution complete.\n"
+    "- Make the verification position clear: say what was verified, what was not verified, "
+    "or what test/command/check would prove the answer correct.\n"
+)
+
 _VOICE_RULES = (
     "Voice & Style:\n"
     "- Write as ME in first person. Use wording I can say immediately.\n"
@@ -261,7 +301,8 @@ _VOICE_RULES = (
     "- For coding problems, consider constraints before writing code and include the relevant "
     "time complexity and space complexity. Check overflow and large integer handling; use BigInt "
     "or arbitrary-precision integers when the target language and input range require it.\n"
-    "- Correct factual errors clearly, but keep the correction compact.\n"
+    + _CODING_DEPTH_RULES
+    + "- Correct factual errors clearly, but keep the correction compact.\n"
     "- End cleanly - land the thought without a recap or follow-up invitation.\n"
     "- Never say 'as an AI' or 'I'm an AI'. Never sound like a template. This IS my voice."
 )
@@ -466,7 +507,7 @@ def analyze_text(
         return content
 
     client = _get_text_client()
-    max_tok = 2048 if is_ollama else 4096
+    max_tok = _OLLAMA_TEXT_MAX_TOKENS if is_ollama else _OPENAI_TEXT_MAX_COMPLETION_TOKENS
     use_stream = on_token is not None
 
     try:
@@ -502,17 +543,27 @@ def analyze_text(
 
     if use_stream:
         raw = ""
+        truncated = False
         for chunk in response:
-            delta = chunk.choices[0].delta.content or ""
+            choice = chunk.choices[0]
+            truncated = truncated or _finish_reason_is_length(choice)
+            delta = choice.delta.content or ""
             if delta:
                 raw += delta
                 cleaned = _strip_thinking(raw)
                 if cleaned:
                     on_token(cleaned)
         content = _strip_thinking(raw)
+        if truncated:
+            content = _append_truncation_notice(content)
+            if on_token is not None:
+                on_token(content)
     else:
-        content = response.choices[0].message.content or ""
+        choice = response.choices[0]
+        content = choice.message.content or ""
         content = _strip_thinking(content)
+        if _finish_reason_is_length(choice):
+            content = _append_truncation_notice(content)
 
     logger.info("Text analysis complete.")
     return content.strip()
@@ -560,7 +611,7 @@ def analyze_auto_whisper(
         return content
 
     client = _get_text_client()
-    max_tok = 768 if is_ollama else 1024
+    max_tok = _AUTO_WHISPER_OLLAMA_MAX_TOKENS if is_ollama else _AUTO_WHISPER_OPENAI_MAX_COMPLETION_TOKENS
     use_stream = on_token is not None
 
     try:
@@ -594,17 +645,27 @@ def analyze_auto_whisper(
 
     if use_stream:
         raw = ""
+        truncated = False
         for chunk in response:
-            delta = chunk.choices[0].delta.content or ""
+            choice = chunk.choices[0]
+            truncated = truncated or _finish_reason_is_length(choice)
+            delta = choice.delta.content or ""
             if delta:
                 raw += delta
                 cleaned = _strip_thinking(raw)
                 if cleaned:
                     on_token(cleaned)
         content = _strip_thinking(raw)
+        if truncated:
+            content = _append_truncation_notice(content)
+            if on_token is not None:
+                on_token(content)
     else:
-        content = response.choices[0].message.content or ""
+        choice = response.choices[0]
+        content = choice.message.content or ""
         content = _strip_thinking(content)
+        if _finish_reason_is_length(choice):
+            content = _append_truncation_notice(content)
 
     logger.info("Auto whisper complete.")
     return content.strip()
@@ -669,7 +730,7 @@ def analyze_screenshots(
 
     client = _get_image_client()
     is_ollama = LLM_IMAGE_PROVIDER == "ollama"
-    max_tok = 2048 if is_ollama else 4096
+    max_tok = _OLLAMA_IMAGE_MAX_TOKENS if is_ollama else _OPENAI_IMAGE_MAX_COMPLETION_TOKENS
     use_stream = on_token is not None
 
     try:
@@ -710,17 +771,27 @@ def analyze_screenshots(
 
     if use_stream:
         raw = ""
+        truncated = False
         for chunk in response:
-            delta = chunk.choices[0].delta.content or ""
+            choice = chunk.choices[0]
+            truncated = truncated or _finish_reason_is_length(choice)
+            delta = choice.delta.content or ""
             if delta:
                 raw += delta
                 cleaned = _strip_thinking(raw)
                 if cleaned:
                     on_token(cleaned)
         content = _strip_thinking(raw)
+        if truncated:
+            content = _append_truncation_notice(content)
+            if on_token is not None:
+                on_token(content)
     else:
-        content = response.choices[0].message.content or ""
+        choice = response.choices[0]
+        content = choice.message.content or ""
         content = _strip_thinking(content)
+        if _finish_reason_is_length(choice):
+            content = _append_truncation_notice(content)
 
         logger.info(
             "Screenshot analysis complete using %d screenshot(s), %d view(s).",

@@ -58,6 +58,16 @@ class AnalyzerPromptTests(unittest.TestCase):
         self.assertIn("large integer", prompt)
         self.assertIn("BigInt", prompt)
 
+    def test_coding_prompts_require_deeper_evidence_and_verification_pass(self):
+        for prompt in (analyzer.SYSTEM_PROMPT, analyzer.VISION_PROMPT):
+            self.assertIn("For coding and code review", prompt)
+            self.assertIn("evidence", prompt)
+            self.assertIn("assumptions", prompt)
+            self.assertIn("contradicts", prompt)
+            self.assertIn("broader rule", prompt)
+            self.assertIn("large, repeated, malformed, partial, stale, or changed inputs", prompt)
+            self.assertIn("what was verified", prompt)
+
     def test_vision_prompt_preserves_screenshot_continuity_and_file_boundaries(self):
         prompt = analyzer.VISION_PROMPT
 
@@ -146,6 +156,7 @@ class AnalyzerPromptTests(unittest.TestCase):
 
         self.assertEqual(fake_client.create_kwargs["model"], "gpt-5.5")
         self.assertIn("max_completion_tokens", fake_client.create_kwargs)
+        self.assertGreaterEqual(fake_client.create_kwargs["max_completion_tokens"], 8192)
         self.assertNotIn("max_tokens", fake_client.create_kwargs)
         self.assertNotIn("temperature", fake_client.create_kwargs)
 
@@ -178,7 +189,27 @@ class AnalyzerPromptTests(unittest.TestCase):
 
         self.assertEqual(fake_client.create_kwargs["model"], "gpt-5.5")
         self.assertIn("max_completion_tokens", fake_client.create_kwargs)
+        self.assertGreaterEqual(fake_client.create_kwargs["max_completion_tokens"], 16384)
         self.assertNotIn("max_tokens", fake_client.create_kwargs)
+
+    def test_analyze_text_marks_length_truncated_responses(self):
+        fake_client = FakeTextClient(content="partial answer", finish_reason="length")
+        original_get_text_client = analyzer._get_text_client
+        original_provider = analyzer.LLM_TEXT_PROVIDER
+        original_model = analyzer.OPENAI_TEXT_MODEL
+
+        try:
+            analyzer.LLM_TEXT_PROVIDER = "openai"
+            analyzer.OPENAI_TEXT_MODEL = "gpt-5.5"
+            analyzer._get_text_client = lambda: fake_client
+            result = analyzer.analyze_text("give a long answer")
+        finally:
+            analyzer._get_text_client = original_get_text_client
+            analyzer.LLM_TEXT_PROVIDER = original_provider
+            analyzer.OPENAI_TEXT_MODEL = original_model
+
+        self.assertIn("partial answer", result)
+        self.assertIn("output limit", result.lower())
 
     def test_analyze_transcript_forwards_recent_context_memory(self):
         fake_client = FakeTextClient()
@@ -283,14 +314,16 @@ class AnalyzerPromptTests(unittest.TestCase):
 
 
 class FakeTextClient:
-    def __init__(self):
+    def __init__(self, content="covered", finish_reason="stop"):
+        self.content = content
+        self.finish_reason = finish_reason
         self.create_kwargs = None
         self.chat = SimpleNamespace(completions=SimpleNamespace(create=self._create))
 
     def _create(self, **kwargs):
         self.create_kwargs = kwargs
-        message = SimpleNamespace(content="covered")
-        choice = SimpleNamespace(message=message)
+        message = SimpleNamespace(content=self.content)
+        choice = SimpleNamespace(message=message, finish_reason=self.finish_reason)
         return SimpleNamespace(choices=[choice])
 
 
