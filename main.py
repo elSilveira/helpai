@@ -17,11 +17,11 @@ import keyboard  # global hotkey library
 import pystray
 from PIL import Image, ImageDraw, ImageFont
 
-from analyzer import analyze_auto_whisper, analyze_screenshots, analyze_text, analyze_transcript
+from analyzer import analyze_auto_whisper, analyze_screenshots, analyze_text
 from auto_whisper import (
     AUTO_WHISPER_DEBOUNCE_SECONDS,
-    AUTO_WHISPER_IDLE_RETRY_SECONDS,
     AutoWhisperState,
+    build_auto_whisper_request,
 )
 from codex_client import close_default_client, warm_default_client
 from context_memory import ContextMemory
@@ -32,6 +32,7 @@ from config import (
     HOTKEY_ANALYZE_SCREENSHOTS,
     HOTKEY_AUDIO_ANALYSIS,
     HOTKEY_CLEAR_CONTEXT,
+    HOTKEY_NOTES,
     HOTKEY_QUICK_INPUT,
     HOTKEY_SCREENSHOT_FEEDBACK,
     HOTKEY_SHOW_CONVERSATION,
@@ -46,6 +47,7 @@ from config import (
 )
 from local_transcriber import is_model_cached, preload_model
 from overlay import LoadingSplash, OverlayApp
+from persistent_context import build_persistent_context
 from screenshot import capture_full_screen
 from screenshot_batch import ScreenshotBatch
 from speech_to_text import describe_active_stt_provider, get_active_stt_provider, transcribe_audio_array
@@ -150,7 +152,11 @@ def _get_last_exchange() -> tuple[str, str] | None:
 
 def _get_recent_context() -> str:
     """Return bounded recent context for continuity across automatic analysis."""
-    return _context_memory.build_context_block()
+    persistent_context = build_persistent_context()
+    memory_context = _context_memory.build_context_block()
+    return "\n\n---\n\n".join(
+        part for part in (persistent_context, memory_context) if part.strip()
+    )
 
 
 def _save_exchange(request_text: str, response_text: str, kind: str = "conversation") -> None:
@@ -224,17 +230,6 @@ def _schedule_auto_whisper_after(delay_seconds: float) -> None:
         _auto_whisper_timer.start()
 
 
-def _capture_has_active_audio() -> bool:
-    if capture is None:
-        return False
-    try:
-        levels = capture.get_audio_levels()
-    except Exception:
-        logger.debug("Could not read audio levels for auto-whisper gating.", exc_info=True)
-        return False
-    return any(bool(stream.get("active")) for stream in levels.values())
-
-
 def _run_auto_whisper() -> None:
     """Read retained transcript and generate a compact suggestion if it changed."""
     global _auto_whisper_timer, _auto_whisper_running
@@ -245,10 +240,6 @@ def _run_auto_whisper() -> None:
         _auto_whisper_timer = None
         if not _auto_whisper_enabled or _auto_whisper_running:
             return
-
-    if _capture_has_active_audio():
-        _schedule_auto_whisper_after(AUTO_WHISPER_IDLE_RETRY_SECONDS)
-        return
 
     wait_seconds = _auto_whisper_state.retry_after_seconds()
     if wait_seconds > 0:
@@ -340,28 +331,24 @@ def _action_audio_analysis() -> None:
         app.schedule(app.set_insight, "No transcript yet — keep talking.")
         return
 
+    request_text = build_auto_whisper_request(input_text, output_text)
+
     loading_started = True
-    app.schedule(app.begin_loading, "Analyzing Conversation")
-    app.schedule(app.set_status, "Analyzing transcript…")
+    app.schedule(app.begin_loading, "Whispering Conversation")
+    app.schedule(app.set_status, "Whispering...")
     app.schedule(
         app.set_insight,
-        "Analyzing Conversation\n\nReading the latest transcript and drafting your response.",
+        "Whispering Conversation\n\nReading the latest transcript and drafting your response.",
     )
 
     try:
-        result = analyze_transcript(
-            input_text, output_text,
+        result = analyze_auto_whisper(
+            request_text,
             last_exchange=_get_last_exchange(),
             recent_context=_get_recent_context(),
             on_token=lambda t: app.schedule(app.set_insight, t),
         )
-        # Build combined request text for context extraction
-        combined_req = ""
-        if output_text.strip():
-            combined_req += f"[OTHER PARTICIPANT]:\n{output_text.strip()}\n\n"
-        if input_text.strip():
-            combined_req += f"[YOU]:\n{input_text.strip()}"
-        _save_exchange(combined_req, result, kind="audio")
+        _save_exchange(request_text, result, kind="audio")
         app.schedule(_set_insight_with_history, result)
     except Exception as exc:
         logger.exception("Audio analysis error")
@@ -509,6 +496,11 @@ def on_analyze_screenshots_hotkey() -> None:
 def on_quick_input_hotkey() -> None:
     app.schedule(app.show)
     app.schedule(app.open_quick_input)
+
+
+def on_notes_hotkey() -> None:
+    app.schedule(app.show)
+    app.schedule(app.toggle_notes)
 
 
 # ── Live transcript callback ────────────────────────────────────────────────
@@ -890,6 +882,7 @@ def main() -> None:
     keyboard.add_hotkey(HOTKEY_SCREENSHOT_FEEDBACK, on_screenshot_hotkey, suppress=False)
     keyboard.add_hotkey(HOTKEY_ANALYZE_SCREENSHOTS, on_analyze_screenshots_hotkey, suppress=False)
     keyboard.add_hotkey(HOTKEY_QUICK_INPUT, on_quick_input_hotkey, suppress=False)
+    keyboard.add_hotkey(HOTKEY_NOTES, on_notes_hotkey, suppress=False)
     keyboard.add_hotkey(HOTKEY_SHOW_CONVERSATION, lambda: app.schedule(app.toggle_conversation), suppress=False)
     keyboard.add_hotkey(HOTKEY_CLEAR_CONTEXT, lambda: app.schedule(_clear_context_memory), suppress=False)
     logger.info("Global hotkeys registered.")

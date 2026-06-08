@@ -6,7 +6,7 @@ toggled by icon buttons on the left rail.
 """
 
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 import logging
 import threading
 import webbrowser
@@ -24,6 +24,13 @@ from config import (
     OVERLAY_FG_COLOR,
     OVERLAY_ACCENT_COLOR,
     OVERLAY_FONT_FAMILY,
+)
+from persistent_context import (
+    add_meeting_subject,
+    disconsider_meeting_subject,
+    extract_pdf_text,
+    remove_meeting_subject,
+    use_meeting_subject,
 )
 
 logger = logging.getLogger(__name__)
@@ -293,6 +300,7 @@ class SettingsWindow:
     # Section definitions: (key, icon, label)
     _SECTIONS = [
         ("codex",      "CX", "Codex"),
+        ("context",    "CTX", "Context"),
         ("llm",        "🧠", "AI Model"),
         ("audio",      "🎙", "Audio"),
         ("stt",        "🎤", "Speech"),
@@ -510,6 +518,7 @@ class SettingsWindow:
 
         self._build_llm_panel()
         self._build_codex_panel()
+        self._build_context_panel()
         self._build_audio_panel()
         self._build_stt_panel()
         self._build_hotkeys_panel()
@@ -675,6 +684,150 @@ class SettingsWindow:
         card = self._card(p, "Model")
         self._text_row(card, "Model Override", "CODEX_MODEL", f)
         self._hint(card, "Leave empty to use the default model from your Codex configuration")
+
+    def _build_context_panel(self):
+        p = self._make_panel("context")
+        f = (_FONT, 11)
+
+        self._panel_header(p, "Conversation Context", "Saved curriculum and meeting context for whispering")
+
+        card = self._card(p, "Curriculum PDF")
+        source_var = tk.StringVar(value=self.data.get("CURRICULUM_SOURCE", ""))
+        self._entries["CURRICULUM_SOURCE"] = source_var
+        source_text = source_var.get() or "No curriculum imported"
+        self._curriculum_status_lbl = tk.Label(
+            card,
+            text=f"Current: {source_text}",
+            bg=_CARD,
+            fg=_SUBTEXT,
+            font=(_FONT, 9),
+            anchor="w",
+            wraplength=470,
+        )
+        self._curriculum_status_lbl.pack(fill=tk.X, pady=(0, 6))
+        curriculum_actions = tk.Frame(card, bg=_CARD)
+        curriculum_actions.pack(fill=tk.X, pady=(0, 4))
+        self._action_button(curriculum_actions, "Import PDF", self._import_curriculum_pdf, side=tk.LEFT)
+        self._action_button(curriculum_actions, "Clear", self._clear_curriculum, side=tk.LEFT)
+        self._hint(card, "PDF text is extracted once and saved; the file is not re-read during whispering")
+        self._textarea_row(card, "Saved Curriculum", "CURRICULUM_TEXT", f, height=6)
+
+        card = self._card(p, "Meeting / Role Subject")
+        self._textarea_row(card, "New Subject", "MEETING_SUBJECT_DRAFT", f, height=3, persist=False)
+
+        subjects = list(self.data.get("MEETING_SUBJECTS") or [])
+        active = self.data.get("ACTIVE_MEETING_SUBJECT", "")
+        subject_var = tk.StringVar(value=active)
+        enabled_var = tk.BooleanVar(value=bool(self.data.get("MEETING_SUBJECT_ENABLED", False)))
+        self._entries["ACTIVE_MEETING_SUBJECT"] = subject_var
+        self._entries["MEETING_SUBJECT_ENABLED"] = enabled_var
+
+        row = tk.Frame(card, bg=_CARD)
+        row.pack(fill=tk.X, pady=3)
+        tk.Label(row, text="Saved Subjects", bg=_CARD, fg=_TEXT,
+                 font=f, width=22, anchor="w").pack(side=tk.LEFT)
+        self._subject_combo = ttk.Combobox(row, textvariable=subject_var, values=subjects, width=30, font=f)
+        self._subject_combo.pack(side=tk.LEFT, padx=(4, 0))
+        self._entries["MEETING_SUBJECTS"] = self._subject_combo
+
+        status = tk.Checkbutton(
+            card,
+            text="Use active subject in responses",
+            variable=enabled_var,
+            bg=_CARD,
+            fg=_TEXT,
+            selectcolor=_SURFACE0,
+            activebackground=_CARD,
+            activeforeground=_TEXT,
+            font=(_FONT, 9),
+        )
+        status.pack(fill=tk.X, pady=(4, 2))
+
+        actions = tk.Frame(card, bg=_CARD)
+        actions.pack(fill=tk.X, pady=(4, 0))
+        self._action_button(actions, "Save / Use", self._save_use_subject, side=tk.LEFT)
+        self._action_button(actions, "Use", self._use_selected_subject, side=tk.LEFT)
+        self._action_button(actions, "Disconsider", self._disconsider_subject, side=tk.LEFT)
+        self._action_button(actions, "Remove", self._remove_selected_subject, side=tk.LEFT)
+        self._hint(card, "Disconsider keeps the subject saved but excludes it from model context")
+
+    def _import_curriculum_pdf(self):
+        path = filedialog.askopenfilename(
+            title="Import curriculum PDF",
+            filetypes=[("PDF files", "*.pdf"), ("All files", "*.*")],
+            parent=self.root,
+        )
+        if not path:
+            return
+        try:
+            text = extract_pdf_text(path)
+        except Exception as exc:
+            messagebox.showerror("Import PDF", str(exc), parent=self.root)
+            return
+        if not text:
+            messagebox.showwarning("Import PDF", "No readable text was found in this PDF.", parent=self.root)
+            return
+
+        source_var = self._entries.get("CURRICULUM_SOURCE")
+        if isinstance(source_var, tk.StringVar):
+            source_var.set(path)
+        text_widget = self._entries.get("CURRICULUM_TEXT")
+        if isinstance(text_widget, tk.Text):
+            text_widget.delete("1.0", tk.END)
+            text_widget.insert("1.0", text)
+        if hasattr(self, "_curriculum_status_lbl"):
+            self._curriculum_status_lbl.config(text=f"Current: {path}")
+
+    def _clear_curriculum(self):
+        source_var = self._entries.get("CURRICULUM_SOURCE")
+        if isinstance(source_var, tk.StringVar):
+            source_var.set("")
+        text_widget = self._entries.get("CURRICULUM_TEXT")
+        if isinstance(text_widget, tk.Text):
+            text_widget.delete("1.0", tk.END)
+        if hasattr(self, "_curriculum_status_lbl"):
+            self._curriculum_status_lbl.config(text="Current: No curriculum imported")
+
+    def _subject_settings_snapshot(self) -> dict:
+        data = self._collect()
+        return {
+            "MEETING_SUBJECTS": list(data.get("MEETING_SUBJECTS") or []),
+            "ACTIVE_MEETING_SUBJECT": str(data.get("ACTIVE_MEETING_SUBJECT") or ""),
+            "MEETING_SUBJECT_ENABLED": bool(data.get("MEETING_SUBJECT_ENABLED", False)),
+        }
+
+    def _apply_subject_settings(self, data: dict) -> None:
+        subjects = list(data.get("MEETING_SUBJECTS") or [])
+        if hasattr(self, "_subject_combo"):
+            self._subject_combo.configure(values=subjects)
+        active_var = self._entries.get("ACTIVE_MEETING_SUBJECT")
+        if isinstance(active_var, tk.StringVar):
+            active_var.set(data.get("ACTIVE_MEETING_SUBJECT", ""))
+        enabled_var = self._entries.get("MEETING_SUBJECT_ENABLED")
+        if isinstance(enabled_var, tk.BooleanVar):
+            enabled_var.set(bool(data.get("MEETING_SUBJECT_ENABLED", False)))
+
+    def _save_use_subject(self):
+        data = self._subject_settings_snapshot()
+        draft_widget = self._entries.get("MEETING_SUBJECT_DRAFT")
+        draft = draft_widget.get("1.0", tk.END).strip() if isinstance(draft_widget, tk.Text) else ""
+        add_meeting_subject(data, draft)
+        self._apply_subject_settings(data)
+
+    def _use_selected_subject(self):
+        data = self._subject_settings_snapshot()
+        use_meeting_subject(data, data.get("ACTIVE_MEETING_SUBJECT", ""))
+        self._apply_subject_settings(data)
+
+    def _disconsider_subject(self):
+        data = self._subject_settings_snapshot()
+        disconsider_meeting_subject(data)
+        self._apply_subject_settings(data)
+
+    def _remove_selected_subject(self):
+        data = self._subject_settings_snapshot()
+        remove_meeting_subject(data, data.get("ACTIVE_MEETING_SUBJECT", ""))
+        self._apply_subject_settings(data)
 
     def _codex_status_text(self) -> str:
         if not self._codex_available:
@@ -864,6 +1017,7 @@ class SettingsWindow:
         self._hotkey_row(card, "Save Screenshot", "HOTKEY_SCREENSHOT_FEEDBACK", f)
         self._hotkey_row(card, "Analyze Saved Screenshots", "HOTKEY_ANALYZE_SCREENSHOTS", f)
         self._hotkey_row(card, "Quick Text Input", "HOTKEY_QUICK_INPUT", f)
+        self._hotkey_row(card, "Take Notes", "HOTKEY_NOTES", f)
         self._hotkey_row(card, "Show / Hide Overlay", "HOTKEY_SHOW_CONVERSATION", f)
         self._hotkey_row(card, "Clear Context", "HOTKEY_CLEAR_CONTEXT", f)
 
@@ -1265,6 +1419,30 @@ class SettingsWindow:
         entry.pack(side=tk.LEFT, padx=(4, 0), ipady=3)
         self._entries[key] = entry
 
+    def _textarea_row(self, parent: tk.Widget, label: str, key: str, font, height: int = 4, persist: bool = True):
+        row = tk.Frame(parent, bg=_CARD)
+        row.pack(fill=tk.X, pady=3)
+        tk.Label(row, text=label, bg=_CARD, fg=_TEXT,
+                 font=font, width=22, anchor="nw").pack(side=tk.LEFT)
+        text = tk.Text(
+            row,
+            bg=_SURFACE0,
+            fg=_TEXT,
+            insertbackground=_TEXT,
+            font=(_FONT, 10),
+            relief=tk.FLAT,
+            width=34,
+            height=height,
+            wrap=tk.WORD,
+            highlightthickness=1,
+            highlightcolor=_ACCENT,
+            highlightbackground=_SURFACE1,
+        )
+        if persist:
+            text.insert("1.0", self.data.get(key, ""))
+        text.pack(side=tk.LEFT, padx=(4, 0), ipady=3)
+        self._entries[key] = text
+
     def _slider_row(self, parent: tk.Widget, label: str, key: str, font, lo: float, hi: float):
         row = tk.Frame(parent, bg=_CARD)
         row.pack(fill=tk.X, pady=3)
@@ -1369,11 +1547,17 @@ class SettingsWindow:
     def _collect(self) -> dict:
         result = dict(self.data)
         for key, widget in self._entries.items():
+            if key == "MEETING_SUBJECT_DRAFT":
+                continue
             value = None
-            if isinstance(widget, (tk.DoubleVar, tk.IntVar, tk.StringVar)):
+            if key == "MEETING_SUBJECTS" and isinstance(widget, ttk.Combobox):
+                value = list(widget.cget("values"))
+            elif isinstance(widget, (tk.DoubleVar, tk.IntVar, tk.StringVar, tk.BooleanVar)):
                 value = widget.get()
             elif isinstance(widget, tk.Entry):
                 value = widget.get().strip()
+            elif isinstance(widget, tk.Text):
+                value = widget.get("1.0", tk.END).strip()
             elif hasattr(widget, "get"):
                 value = widget.get()
 

@@ -124,6 +124,7 @@ HOTKEY_AUDIO_ANALYSIS = _user.get("HOTKEY_AUDIO_ANALYSIS", "ctrl+shift+d")
 HOTKEY_SCREENSHOT_FEEDBACK = _user.get("HOTKEY_SCREENSHOT_FEEDBACK", "ctrl+shift+e")
 HOTKEY_ANALYZE_SCREENSHOTS = _user.get("HOTKEY_ANALYZE_SCREENSHOTS", "ctrl+shift+a")
 HOTKEY_QUICK_INPUT = _user.get("HOTKEY_QUICK_INPUT", "ctrl+shift+enter")
+HOTKEY_NOTES = _user.get("HOTKEY_NOTES", "ctrl+shift+n")
 HOTKEY_SHOW_CONVERSATION = _user.get("HOTKEY_SHOW_CONVERSATION", "ctrl+shift+s")
 HOTKEY_CLEAR_CONTEXT = _user.get("HOTKEY_CLEAR_CONTEXT", "ctrl+shift+x")
 

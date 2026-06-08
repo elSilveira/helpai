@@ -46,6 +46,7 @@ DEFAULTS = {
     "HOTKEY_SCREENSHOT_FEEDBACK": "ctrl+shift+e",
     "HOTKEY_ANALYZE_SCREENSHOTS": "ctrl+shift+a",
     "HOTKEY_QUICK_INPUT": "ctrl+shift+enter",
+    "HOTKEY_NOTES": "ctrl+shift+n",
     "HOTKEY_SHOW_CONVERSATION": "ctrl+shift+s",
     "HOTKEY_CLEAR_CONTEXT": "ctrl+shift+x",
     "AUDIO_CAPTURE_ENABLED": True,
@@ -77,6 +78,11 @@ DEFAULTS = {
     "LOCAL_WHISPER_DEVICE": "auto",
     "KILL_OLLAMA_ON_EXIT": False,
     "RESPONSE_PROFILE": "software_engineer",
+    "CURRICULUM_TEXT": "",
+    "CURRICULUM_SOURCE": "",
+    "MEETING_SUBJECTS": [],
+    "ACTIVE_MEETING_SUBJECT": "",
+    "MEETING_SUBJECT_ENABLED": False,
 }
 
 _cache: dict | None = None

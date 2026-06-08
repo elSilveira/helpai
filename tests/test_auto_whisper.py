@@ -28,8 +28,8 @@ class FakeCapture:
 
 
 class AutoWhisperTests(unittest.TestCase):
-    def test_auto_whisper_debounce_delay_is_two_seconds(self):
-        self.assertEqual(AUTO_WHISPER_DEBOUNCE_SECONDS, 2.0)
+    def test_auto_whisper_debounce_delay_is_fast_enough_for_live_help(self):
+        self.assertLessEqual(AUTO_WHISPER_DEBOUNCE_SECONDS, 1.0)
 
     def test_reads_transcript_without_clearing_context(self):
         capture = FakeCapture(output_text="First paragraph.\nSecond paragraph.")

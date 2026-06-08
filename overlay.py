@@ -438,7 +438,7 @@ class OverlayApp:
         self.root.configure(bg=_CRUST, highlightbackground=_SURFACE1,
                             highlightthickness=1)
 
-        bar_w = 620
+        bar_w = 720
         bar_h = 40
         screen_w = self.root.winfo_screenwidth()
         screen_h = self.root.winfo_screenheight()
@@ -490,6 +490,10 @@ class OverlayApp:
         # ── Quick-input window ─────────────────────────────────────────
         self._quick_input_win: tk.Toplevel | None = None
         self._saved_quick_input_geo: str | None = None
+        self._notes_win: tk.Toplevel | None = None
+        self._notes_visible = False
+        self._saved_notes_geo: str | None = None
+        self._notes_text: tk.Text | None = None
 
         # ── Loading animation state ────────────────────────────────────
         self._loading_active = False
@@ -627,6 +631,10 @@ class OverlayApp:
         input_btn = self._bar_icon_btn(f, "⌨", _SUBTEXT, "Quick Input (Ctrl+Shift+Enter)")
         input_btn.pack(side=tk.LEFT, padx=1)
         input_btn.bind("<Button-1>", lambda _: self.open_quick_input())
+
+        notes_btn = self._bar_icon_btn(f, " N ", _SUBTEXT, "Take Notes (Ctrl+Shift+N)")
+        notes_btn.pack(side=tk.LEFT, padx=1)
+        notes_btn.bind("<Button-1>", lambda _: self.open_notes())
 
         # ── Status label fills remaining center space ─────────────────
         self._status_label = tk.Label(
@@ -1449,6 +1457,142 @@ class OverlayApp:
     #  Quick Input Dialog
     # ═══════════════════════════════════════════════════════════════════
 
+    def open_notes(self) -> None:
+        if self._notes_win and self._notes_win.winfo_exists():
+            self._notes_win.deiconify()
+            self._notes_win.lift()
+            self._notes_win.attributes("-topmost", True)
+            if self._saved_notes_geo:
+                self._notes_win.geometry(self._saved_notes_geo)
+            self._notes_visible = True
+            if self._notes_text:
+                self._notes_text.focus_force()
+            self.root.lift()
+            return
+
+        self._build_notes_window()
+
+    def toggle_notes(self) -> None:
+        if self._notes_win and self._notes_win.winfo_exists() and self._notes_visible:
+            self._close_notes()
+            return
+        self.open_notes()
+
+    def _build_notes_window(self) -> None:
+        win = tk.Toplevel(self.root)
+        win.overrideredirect(True)
+        win.attributes("-topmost", True)
+        win.attributes("-alpha", INSIGHT_OVERLAY_OPACITY)
+        win.configure(bg=_CRUST, highlightbackground=_SURFACE1,
+                      highlightthickness=1)
+
+        w, h = 820, 520
+        sx = max(10, self.root.winfo_x() + (self.root.winfo_width() - w) // 2)
+        sy = max(10, self.root.winfo_y() - h - 8)
+        win.geometry(f"{w}x{h}+{sx}+{sy}")
+        _apply_exclusion(win)
+
+        title = tk.Frame(win, bg=_CRUST, height=28)
+        title.pack(fill=tk.X)
+        title.pack_propagate(False)
+        tk.Frame(title, bg=_YELLOW, width=3).pack(side=tk.LEFT, fill=tk.Y)
+
+        label = tk.Label(
+            title, text="  Take Notes",
+            bg=_CRUST, fg=_TEXT,
+            font=(OVERLAY_FONT_FAMILY, 8, "bold"),
+            anchor="w",
+        )
+        label.pack(side=tk.LEFT, padx=2)
+
+        close_btn = tk.Label(
+            title, text=" ✕ ",
+            bg=_CRUST, fg=_SURFACE2,
+            font=(OVERLAY_FONT_FAMILY, 9), cursor="hand2",
+        )
+        close_btn.pack(side=tk.RIGHT, padx=(0, 4))
+        close_btn.bind("<Button-1>", lambda _: self._close_notes())
+        close_btn.bind("<Enter>", lambda e: close_btn.config(fg=_RED))
+        close_btn.bind("<Leave>", lambda e: close_btn.config(fg=_SURFACE2))
+
+        clear_btn = tk.Label(
+            title, text=" Clear ",
+            bg=_CRUST, fg=_SURFACE2,
+            font=(OVERLAY_FONT_FAMILY, 8), cursor="hand2",
+        )
+        clear_btn.pack(side=tk.RIGHT, padx=(0, 2))
+        clear_btn.bind("<Button-1>", lambda _: self._clear_notes())
+        clear_btn.bind("<Enter>", lambda e: clear_btn.config(fg=_PEACH))
+        clear_btn.bind("<Leave>", lambda e: clear_btn.config(fg=_SURFACE2))
+
+        _make_draggable(win, title, label)
+        tk.Frame(win, bg=_SURFACE1, height=1).pack(fill=tk.X)
+
+        body = tk.Frame(win, bg=_BASE)
+        body.pack(fill=tk.BOTH, expand=True)
+
+        vbar = tk.Scrollbar(body, orient=tk.VERTICAL)
+        hbar = tk.Scrollbar(body, orient=tk.HORIZONTAL)
+        text = tk.Text(
+            body,
+            bg=_BASE,
+            fg=_TEXT,
+            insertbackground=_YELLOW,
+            selectbackground=_SURFACE2,
+            selectforeground="#f5e0dc",
+            font=("Consolas", OVERLAY_FONT_SIZE),
+            relief=tk.FLAT,
+            highlightthickness=0,
+            borderwidth=0,
+            wrap=tk.NONE,
+            undo=True,
+            padx=14,
+            pady=12,
+            xscrollcommand=hbar.set,
+            yscrollcommand=vbar.set,
+        )
+        vbar.config(command=text.yview, bg=_SURFACE0, troughcolor=_MANTLE,
+                    activebackground=_SURFACE1, relief=tk.FLAT, width=12)
+        hbar.config(command=text.xview, bg=_SURFACE0, troughcolor=_MANTLE,
+                    activebackground=_SURFACE1, relief=tk.FLAT, width=12)
+        vbar.pack(side=tk.RIGHT, fill=tk.Y)
+        hbar.pack(side=tk.BOTTOM, fill=tk.X)
+        text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        grip = tk.Frame(win, bg=_CRUST, cursor="size_nw_se", height=8)
+        grip.pack(fill=tk.X, side=tk.BOTTOM)
+        grip_label = tk.Label(grip, text="⋯", bg=_CRUST, fg=_SURFACE1,
+                              font=(OVERLAY_FONT_FAMILY, 6), cursor="size_nw_se")
+        grip_label.pack(side=tk.RIGHT, padx=4)
+        self._add_resize_bottom(grip, win)
+        self._add_resize_corner(grip_label, win)
+        self._add_edge_resize(win)
+
+        text.bind("<Control-a>", lambda _e: (text.tag_add(tk.SEL, "1.0", tk.END), "break")[1])
+        win.bind("<Escape>", lambda _: self._close_notes())
+
+        self._notes_win = win
+        self._notes_text = text
+        self._notes_visible = True
+        text.focus_force()
+        self.root.lift()
+
+    def _close_notes(self) -> None:
+        if not self._panel_alive(self._notes_win):
+            self._notes_visible = False
+            return
+        try:
+            self._saved_notes_geo = self._notes_win.geometry()
+        except Exception:
+            pass
+        self._notes_win.withdraw()
+        self._notes_visible = False
+
+    def _clear_notes(self) -> None:
+        if self._notes_text is None:
+            return
+        self._notes_text.delete("1.0", tk.END)
+
     def open_quick_input(self) -> None:
         if self._quick_input_win and self._quick_input_win.winfo_exists():
             self._quick_input_win.focus_force()
@@ -1826,6 +1970,7 @@ class OverlayApp:
             (self._insight_panel, self._insight_visible, self._saved_insight_geo),
             (self._code_panel, self._code_visible, self._saved_code_geo),
             (self._settings_panel, self._settings_visible, self._saved_settings_geo),
+            (self._notes_win, self._notes_visible, self._saved_notes_geo),
         ]:
             if self._panel_alive(panel) and visible:
                 if saved_geo:
@@ -1876,6 +2021,12 @@ class OverlayApp:
             except Exception:
                 pass
             self._quick_input_win.withdraw()
+        if self._panel_alive(self._notes_win) and self._notes_visible:
+            try:
+                self._saved_notes_geo = self._notes_win.geometry()
+            except Exception:
+                pass
+            self._notes_win.withdraw()
         self.root.withdraw()
 
     def toggle(self) -> None:
