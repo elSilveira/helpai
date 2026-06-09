@@ -20,3 +20,4 @@ settings.json
 
 *.log
 logs/
+.worktrees/
