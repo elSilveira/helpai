@@ -30,6 +30,7 @@ from config import (
     OVERLAY_WIDTH,
     STEALTH_MODE,
 )
+from ui_scaling import configure_tk_scaling, scale_px
 from visibility import exclude_from_capture, include_in_capture
 
 logger = logging.getLogger(__name__)
@@ -247,21 +248,22 @@ class ClosingSplash:
 
     def __init__(self, parent: "tk.Tk | None" = None) -> None:
         self.root = tk.Toplevel(parent) if parent else tk.Tk()
+        self._ui_scale = configure_tk_scaling(self.root)
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", True)
         self.root.configure(bg=_CRUST, highlightbackground=_SURFACE1,
                             highlightthickness=1)
 
-        w, h = 300, 90
+        w, h = self._px(300), self._px(90)
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
         self.root.geometry(f"{w}x{h}+{(sw - w) // 2}+{(sh - h) // 2}")
 
         # Top accent line
-        tk.Frame(self.root, bg=_RED, height=2).pack(fill=tk.X, side=tk.TOP)
+        tk.Frame(self.root, bg=_RED, height=self._px(2)).pack(fill=tk.X, side=tk.TOP)
 
         inner = tk.Frame(self.root, bg=_CRUST)
-        inner.pack(fill=tk.BOTH, expand=True, padx=24, pady=14)
+        inner.pack(fill=tk.BOTH, expand=True, padx=self._px(24), pady=self._px(14))
 
         tk.Label(
             inner,
@@ -304,6 +306,9 @@ class ClosingSplash:
             pass
         self._after_id = self.root.after(50, self._animate)
 
+    def _px(self, value: int | float) -> int:
+        return scale_px(value, self._ui_scale)
+
     def run(self) -> None:
         try:
             self.root.mainloop()
@@ -323,21 +328,22 @@ class LoadingSplash:
 
     def __init__(self) -> None:
         self.root = tk.Tk()
+        self._ui_scale = configure_tk_scaling(self.root)
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", True)
         self.root.configure(bg=_CRUST, highlightbackground=_SURFACE1,
                             highlightthickness=1)
 
-        w, h = 380, 160
+        w, h = self._px(380), self._px(160)
         sw = self.root.winfo_screenwidth()
         sh = self.root.winfo_screenheight()
         self.root.geometry(f"{w}x{h}+{(sw - w) // 2}+{(sh - h) // 2}")
 
         # Top accent line
-        tk.Frame(self.root, bg=_ACCENT, height=2).pack(fill=tk.X, side=tk.TOP)
+        tk.Frame(self.root, bg=_ACCENT, height=self._px(2)).pack(fill=tk.X, side=tk.TOP)
 
         inner = tk.Frame(self.root, bg=_CRUST)
-        inner.pack(fill=tk.BOTH, expand=True, padx=28, pady=18)
+        inner.pack(fill=tk.BOTH, expand=True, padx=self._px(28), pady=self._px(18))
 
         # App name + version row
         hdr = tk.Frame(inner, bg=_CRUST)
@@ -365,12 +371,12 @@ class LoadingSplash:
             bg=_CRUST,
             fg=_SUBTEXT,
             font=(OVERLAY_FONT_FAMILY, 9),
-            wraplength=320,
+            wraplength=self._px(320),
             justify=tk.LEFT,
         ).pack(anchor="w", pady=(10, 0))
 
         # Progress bar
-        bar_frame = tk.Frame(inner, bg=_SURFACE0, height=4)
+        bar_frame = tk.Frame(inner, bg=_SURFACE0, height=self._px(4))
         bar_frame.pack(fill=tk.X, pady=(12, 0))
         bar_frame.pack_propagate(False)
         self._progress_bar = tk.Frame(bar_frame, bg=_ACCENT, width=0)
@@ -419,6 +425,9 @@ class LoadingSplash:
     def run(self) -> None:
         self.root.mainloop()
 
+    def _px(self, value: int | float) -> int:
+        return scale_px(value, self._ui_scale)
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  OverlayApp
@@ -431,6 +440,7 @@ class OverlayApp:
     def __init__(self) -> None:
         # ── Root = Control Bar ─────────────────────────────────────────
         self.root = tk.Tk()
+        self._ui_scale = configure_tk_scaling(self.root)
         self.root.title(APP_NAME)
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", True)
@@ -438,8 +448,8 @@ class OverlayApp:
         self.root.configure(bg=_CRUST, highlightbackground=_SURFACE1,
                             highlightthickness=1)
 
-        bar_w = 720
-        bar_h = 40
+        bar_w = self._px(720)
+        bar_h = self._px(40)
         screen_w = self.root.winfo_screenwidth()
         screen_h = self.root.winfo_screenheight()
         bx = (screen_w - bar_w) // 2
@@ -681,18 +691,18 @@ class OverlayApp:
                         highlightthickness=1)
 
         self.root.update_idletasks()
-        pw = OVERLAY_WIDTH
-        ph = OVERLAY_HEIGHT
+        pw = self._px(OVERLAY_WIDTH)
+        ph = self._px(OVERLAY_HEIGHT)
         panel.geometry(f"{pw}x{ph}+{pos_x}+{pos_y}")
         panel.withdraw()
 
         # ── Title bar ──────────────────────────────────────────────────
-        title_frame = tk.Frame(panel, bg=_CRUST, height=30)
+        title_frame = tk.Frame(panel, bg=_CRUST, height=self._px(30))
         title_frame.pack(fill=tk.X)
         title_frame.pack_propagate(False)
 
         # Accent pip on the left
-        tk.Frame(title_frame, bg=accent, width=3).pack(side=tk.LEFT, fill=tk.Y)
+        tk.Frame(title_frame, bg=accent, width=self._px(3)).pack(side=tk.LEFT, fill=tk.Y)
 
         title_label = tk.Label(
             title_frame, text=f"  {title}",
@@ -725,10 +735,10 @@ class OverlayApp:
         _make_draggable(panel, title_frame, title_label)
 
         # ── Subtle divider ─────────────────────────────────────────────
-        tk.Frame(panel, bg=_SURFACE1, height=1).pack(fill=tk.X)
+        tk.Frame(panel, bg=_SURFACE1, height=self._px(1)).pack(fill=tk.X)
 
         # ── Bottom grip ────────────────────────────────────────────────
-        grip = tk.Frame(panel, bg=_CRUST, cursor="sb_v_double_arrow", height=6)
+        grip = tk.Frame(panel, bg=_CRUST, cursor="sb_v_double_arrow", height=self._px(6))
         grip.pack(fill=tk.X, side=tk.BOTTOM)
         grip_label = tk.Label(grip, text="⋯", bg=_CRUST, fg=_SURFACE1,
                               font=(OVERLAY_FONT_FAMILY, 6), cursor="size_nw_se")
@@ -743,8 +753,8 @@ class OverlayApp:
             selectbackground=_SURFACE2,
             selectforeground="#f5e0dc",
             font=(OVERLAY_FONT_FAMILY, OVERLAY_FONT_SIZE),
-            padx=OVERLAY_PADDING + 4,
-            pady=OVERLAY_PADDING,
+            padx=self._px(OVERLAY_PADDING + 4),
+            pady=self._px(OVERLAY_PADDING),
             insertbackground=_TEXT,
             relief=tk.FLAT,
             state=tk.DISABLED,
@@ -1118,10 +1128,10 @@ class OverlayApp:
         if self._insight_panel and self._insight_panel.winfo_exists():
             return
         screen_w = self.root.winfo_screenwidth()
-        insight_x = (screen_w - OVERLAY_WIDTH) // 2
+        insight_x = (screen_w - self._px(OVERLAY_WIDTH)) // 2
         panel, text_w, close_w, clear_w = self._create_panel(
             "Insight", _ACCENT,
-            pos_x=insight_x, pos_y=40, clear_btn=True, clear_tooltip="Clear context",
+            pos_x=insight_x, pos_y=self._px(40), clear_btn=True, clear_tooltip="Clear context",
         )
         self._insight_panel = panel
         self._insight_text = text_w
@@ -1163,11 +1173,12 @@ class OverlayApp:
         if self._code_panel and self._code_panel.winfo_exists():
             return
         screen_w = self.root.winfo_screenwidth()
-        insight_x = (screen_w - OVERLAY_WIDTH) // 2
-        code_x = min(insight_x + OVERLAY_WIDTH + 12, max(10, screen_w - OVERLAY_WIDTH - 10))
+        panel_w = self._px(OVERLAY_WIDTH)
+        insight_x = (screen_w - panel_w) // 2
+        code_x = min(insight_x + panel_w + self._px(12), max(self._px(10), screen_w - panel_w - self._px(10)))
         panel, text_w, close_w, _ = self._create_panel(
             "Code", _TEAL,
-            pos_x=code_x, pos_y=40, clear_btn=False,
+            pos_x=code_x, pos_y=self._px(40), clear_btn=False,
         )
         text_w.config(wrap=tk.NONE, font=("Consolas", OVERLAY_FONT_SIZE))
         self._code_panel = panel
@@ -1239,12 +1250,12 @@ class OverlayApp:
             return
         self._code_panel.update_idletasks()
         line_count = int(self._code_text.index("end-1c").split(".")[0])
-        line_px = int(OVERLAY_FONT_SIZE * 1.8)
-        needed_h = 40 + OVERLAY_PADDING * 2 + (line_count * line_px)
+        line_px = self._px(OVERLAY_FONT_SIZE * 1.8)
+        needed_h = self._px(40 + OVERLAY_PADDING * 2) + (line_count * line_px)
         screen_h = self._code_panel.winfo_screenheight()
         max_h = int(screen_h * 0.80)
         current_h = self._code_panel.winfo_height()
-        new_h = max(current_h, OVERLAY_HEIGHT, min(needed_h, max_h))
+        new_h = max(current_h, self._px(OVERLAY_HEIGHT), min(needed_h, max_h))
         cur_w = self._code_panel.winfo_width()
         cur_x = self._code_panel.winfo_x()
         cur_y = self._code_panel.winfo_y()
@@ -1292,7 +1303,7 @@ class OverlayApp:
         win.root.configure(bg="#1e1e2e")
         win.root.resizable(False, False)
 
-        w, h = 620, 540
+        w, h = self._px(620), self._px(540)
         sx = (win.root.winfo_screenwidth() - w) // 2
         sy = (win.root.winfo_screenheight() - h) // 2
         win.root.geometry(f"{w}x{h}+{sx}+{sy}")
@@ -1366,7 +1377,7 @@ class OverlayApp:
             state["h"] = window.winfo_height()
 
         def on_drag(e):
-            new_h = max(150, state["h"] + (e.y_root - state["y"]))
+            new_h = max(self._px(150), state["h"] + (e.y_root - state["y"]))
             window.geometry(f"{window.winfo_width()}x{new_h}")
 
         grip.bind("<ButtonPress-1>", on_press)
@@ -1382,15 +1393,15 @@ class OverlayApp:
             state["h"] = window.winfo_height()
 
         def on_drag(e):
-            new_w = max(300, state["w"] + (e.x_root - state["x"]))
-            new_h = max(150, state["h"] + (e.y_root - state["y"]))
+            new_w = max(self._px(300), state["w"] + (e.x_root - state["x"]))
+            new_h = max(self._px(150), state["h"] + (e.y_root - state["y"]))
             window.geometry(f"{new_w}x{new_h}")
 
         widget.bind("<ButtonPress-1>", on_press)
         widget.bind("<B1-Motion>", on_drag)
 
     def _add_edge_resize(self, window: tk.Toplevel) -> None:
-        EDGE = 6
+        EDGE = self._px(6)
         state: dict = {}
 
         def _hit_zone(e):
@@ -1430,15 +1441,15 @@ class OverlayApp:
             w, h = state["w"], state["h"]
 
             if state.get("right"):
-                w = max(300, state["w"] + dx)
+                w = max(self._px(300), state["w"] + dx)
             elif state.get("left"):
-                new_w = max(300, state["w"] - dx)
+                new_w = max(self._px(300), state["w"] - dx)
                 x = state["wx"] + (state["w"] - new_w)
                 w = new_w
             if state.get("bottom"):
-                h = max(150, state["h"] + dy)
+                h = max(self._px(150), state["h"] + dy)
             elif state.get("top"):
-                new_h = max(150, state["h"] - dy)
+                new_h = max(self._px(150), state["h"] - dy)
                 y = state["wy"] + (state["h"] - new_h)
                 h = new_h
 
@@ -1486,16 +1497,16 @@ class OverlayApp:
         win.configure(bg=_CRUST, highlightbackground=_SURFACE1,
                       highlightthickness=1)
 
-        w, h = 820, 520
-        sx = max(10, self.root.winfo_x() + (self.root.winfo_width() - w) // 2)
-        sy = max(10, self.root.winfo_y() - h - 8)
+        w, h = self._px(820), self._px(520)
+        sx = max(self._px(10), self.root.winfo_x() + (self.root.winfo_width() - w) // 2)
+        sy = max(self._px(10), self.root.winfo_y() - h - self._px(8))
         win.geometry(f"{w}x{h}+{sx}+{sy}")
         _apply_exclusion(win)
 
-        title = tk.Frame(win, bg=_CRUST, height=28)
+        title = tk.Frame(win, bg=_CRUST, height=self._px(28))
         title.pack(fill=tk.X)
         title.pack_propagate(False)
-        tk.Frame(title, bg=_YELLOW, width=3).pack(side=tk.LEFT, fill=tk.Y)
+        tk.Frame(title, bg=_YELLOW, width=self._px(3)).pack(side=tk.LEFT, fill=tk.Y)
 
         label = tk.Label(
             title, text="  Take Notes",
@@ -1526,7 +1537,7 @@ class OverlayApp:
         clear_btn.bind("<Leave>", lambda e: clear_btn.config(fg=_SURFACE2))
 
         _make_draggable(win, title, label)
-        tk.Frame(win, bg=_SURFACE1, height=1).pack(fill=tk.X)
+        tk.Frame(win, bg=_SURFACE1, height=self._px(1)).pack(fill=tk.X)
 
         body = tk.Frame(win, bg=_BASE)
         body.pack(fill=tk.BOTH, expand=True)
@@ -1546,8 +1557,8 @@ class OverlayApp:
             borderwidth=0,
             wrap=tk.NONE,
             undo=True,
-            padx=14,
-            pady=12,
+            padx=self._px(14),
+            pady=self._px(12),
             xscrollcommand=hbar.set,
             yscrollcommand=vbar.set,
         )
@@ -1559,7 +1570,7 @@ class OverlayApp:
         hbar.pack(side=tk.BOTTOM, fill=tk.X)
         text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        grip = tk.Frame(win, bg=_CRUST, cursor="size_nw_se", height=8)
+        grip = tk.Frame(win, bg=_CRUST, cursor="size_nw_se", height=self._px(8))
         grip.pack(fill=tk.X, side=tk.BOTTOM)
         grip_label = tk.Label(grip, text="⋯", bg=_CRUST, fg=_SURFACE1,
                               font=(OVERLAY_FONT_FAMILY, 6), cursor="size_nw_se")
@@ -1605,19 +1616,19 @@ class OverlayApp:
         win.configure(bg=_CRUST, highlightbackground=_SURFACE1,
                       highlightthickness=1)
 
-        w, h = 620, 160
+        w, h = self._px(620), self._px(160)
         sx = self.root.winfo_x() + (self.root.winfo_width() - w) // 2
-        sy = self.root.winfo_y() - h - 8
+        sy = self.root.winfo_y() - h - self._px(8)
         win.geometry(f"{w}x{h}+{sx}+{sy}")
         _apply_exclusion(win)
 
         # ── Title bar ─────────────────────────────────────────────────
-        tf = tk.Frame(win, bg=_CRUST, height=26)
+        tf = tk.Frame(win, bg=_CRUST, height=self._px(26))
         tf.pack(fill=tk.X)
         tf.pack_propagate(False)
 
         # Accent pip
-        tk.Frame(tf, bg=_ACCENT, width=3).pack(side=tk.LEFT, fill=tk.Y)
+        tk.Frame(tf, bg=_ACCENT, width=self._px(3)).pack(side=tk.LEFT, fill=tk.Y)
 
         tl = tk.Label(tf, text="  Ask anything",
                       bg=_CRUST, fg=_TEXT,
@@ -1632,7 +1643,7 @@ class OverlayApp:
         cb.bind("<Leave>", lambda e: cb.config(fg=_SURFACE2))
         _make_draggable(win, tf, tl)
 
-        tk.Frame(win, bg=_SURFACE1, height=1).pack(fill=tk.X)
+        tk.Frame(win, bg=_SURFACE1, height=self._px(1)).pack(fill=tk.X)
 
         # ── Input area (multiline Text) ───────────────────────────────
         body = tk.Frame(win, bg=_BASE)
@@ -1649,13 +1660,13 @@ class OverlayApp:
             undo=True,
             spacing1=1, spacing3=1,
         )
-        text_input.pack(fill=tk.BOTH, expand=True, padx=14, pady=(10, 4))
+        text_input.pack(fill=tk.BOTH, expand=True, padx=self._px(14), pady=(self._px(10), self._px(4)))
         text_input.focus_force()
 
         # ── Footer row (hint + send button) ───────────────────────────
         footer = tk.Frame(win, bg=_CRUST)
         footer.pack(fill=tk.X)
-        tk.Frame(footer, bg=_SURFACE1, height=1).pack(fill=tk.X)
+        tk.Frame(footer, bg=_SURFACE1, height=self._px(1)).pack(fill=tk.X)
 
         hint = tk.Label(footer, text="  Ctrl+Enter to send",
                         bg=_CRUST, fg=_OVERLAY0,
@@ -1941,13 +1952,13 @@ class OverlayApp:
             return
         self._insight_panel.update_idletasks()
         line_count = int(self._insight_text.index("end-1c").split(".")[0])
-        line_px = int(OVERLAY_FONT_SIZE * 1.8)
-        needed_h = 40 + OVERLAY_PADDING * 2 + (line_count * line_px)
+        line_px = self._px(OVERLAY_FONT_SIZE * 1.8)
+        needed_h = self._px(40 + OVERLAY_PADDING * 2) + (line_count * line_px)
 
         screen_h = self._insight_panel.winfo_screenheight()
         max_h = int(screen_h * 0.80)
         current_h = self._insight_panel.winfo_height()
-        new_h = max(current_h, OVERLAY_HEIGHT, min(needed_h, max_h))
+        new_h = max(current_h, self._px(OVERLAY_HEIGHT), min(needed_h, max_h))
         cur_w = self._insight_panel.winfo_width()
         cur_x = self._insight_panel.winfo_x()
         cur_y = self._insight_panel.winfo_y()
@@ -2040,3 +2051,6 @@ class OverlayApp:
 
     def schedule(self, func: callable, *args) -> None:
         self.root.after(0, func, *args)
+
+    def _px(self, value: int | float) -> int:
+        return scale_px(value, self._ui_scale)

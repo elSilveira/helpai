@@ -65,6 +65,7 @@ py-modules = [
     "settings_ui",
     "speech_to_text",
     "transcript_filters",
+    "ui_scaling",
     "visibility",
 ]
 

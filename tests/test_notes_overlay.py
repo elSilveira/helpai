@@ -21,8 +21,8 @@ class NotesOverlayTests(unittest.TestCase):
         self.assertIn("def open_notes", overlay_source)
         self.assertIn("_notes_win", overlay_source)
         self.assertIn("Take Notes", overlay_source)
-        self.assertIn("w, h = 820, 520", overlay_source)
-        self.assertIn("bar_w = 720", overlay_source)
+        self.assertIn("w, h = self._px(820), self._px(520)", overlay_source)
+        self.assertIn("bar_w = self._px(720)", overlay_source)
         self.assertIn("input_btn.bind(\"<Button-1>\", lambda _: self.open_quick_input())", overlay_source)
         self.assertIn("notes_btn.bind(\"<Button-1>\", lambda _: self.open_notes())", overlay_source)
 

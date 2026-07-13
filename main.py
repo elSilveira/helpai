@@ -13,6 +13,10 @@ import sys
 import threading
 from pathlib import Path
 
+from ui_scaling import configure_process_dpi_awareness
+
+configure_process_dpi_awareness()
+
 import keyboard  # global hotkey library
 import pystray
 from PIL import Image, ImageDraw, ImageFont
@@ -208,6 +212,8 @@ def _set_auto_whisper_enabled(enabled: bool) -> None:
             _auto_whisper_timer = None
     if app:
         app.schedule(app.set_status, "Auto Whisper ON" if enabled else "Auto Whisper OFF")
+    if enabled:
+        _schedule_auto_whisper()
 
 
 def _schedule_auto_whisper() -> None:
@@ -241,15 +247,10 @@ def _run_auto_whisper() -> None:
         if not _auto_whisper_enabled or _auto_whisper_running:
             return
 
-    wait_seconds = _auto_whisper_state.retry_after_seconds()
-    if wait_seconds > 0:
-        _schedule_auto_whisper_after(wait_seconds)
-        return
-
     input_text, output_text = _auto_whisper_state.snapshot_from_capture(capture)
-    request_text = _auto_whisper_state.build_request_if_ready(input_text, output_text)
-    if not request_text:
+    if not _auto_whisper_state.mark_if_changed(input_text, output_text):
         return
+    request_text = build_auto_whisper_request(input_text, output_text)
 
     with _auto_whisper_lock:
         if not _auto_whisper_enabled or _auto_whisper_running:

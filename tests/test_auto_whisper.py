@@ -3,9 +3,7 @@ from types import SimpleNamespace
 
 import analyzer
 from auto_whisper import (
-    AUTO_WHISPER_COOLDOWN_SECONDS,
     AUTO_WHISPER_DEBOUNCE_SECONDS,
-    AUTO_WHISPER_MIN_NEW_CHARS,
     AutoWhisperState,
     build_auto_whisper_request,
 )
@@ -53,37 +51,11 @@ class AutoWhisperTests(unittest.TestCase):
 
         self.assertFalse(state.mark_if_changed("", "   \n "))
 
-    def test_auto_whisper_waits_for_meaningful_new_text(self):
+    def test_auto_whisper_triggers_for_a_short_changed_transcript(self):
         state = AutoWhisperState()
 
-        self.assertIsNone(state.build_request_if_ready("", "Too short.", now=1.0))
-
-        request = state.build_request_if_ready(
-            "",
-            "They explained the customer issue and asked us to slow down the automatic "
-            "assistant so it waits for a stable point before spending tokens.",
-            now=2.0,
-        )
-
-        self.assertIsNotNone(request)
-
-    def test_auto_whisper_respects_cooldown_without_marking_text_sent(self):
-        state = AutoWhisperState()
-        first_text = "A" * AUTO_WHISPER_MIN_NEW_CHARS
-        second_text = first_text + ("B" * AUTO_WHISPER_MIN_NEW_CHARS)
-
-        self.assertIsNotNone(state.build_request_if_ready("", first_text, now=10.0))
-        self.assertIsNone(state.build_request_if_ready("", second_text, now=10.0 + 1.0))
-
-        request = state.build_request_if_ready(
-            "",
-            second_text,
-            now=10.0 + AUTO_WHISPER_COOLDOWN_SECONDS + 0.1,
-        )
-
-        self.assertIsNotNone(request)
-        self.assertIn("B" * AUTO_WHISPER_MIN_NEW_CHARS, request)
-        self.assertNotIn("A" * AUTO_WHISPER_MIN_NEW_CHARS, request)
+        self.assertTrue(state.mark_if_changed("", "Can you explain that?"))
+        self.assertFalse(state.mark_if_changed("", "Can you explain that?"))
 
     def test_auto_whisper_request_is_contextual_and_compact(self):
         request = build_auto_whisper_request("I said we should debounce it.", "They asked if it will loop.")

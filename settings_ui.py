@@ -477,18 +477,41 @@ class SettingsWindow:
 
     def _load_data_async(self):
         """Fetch slow data (Ollama models, audio devices) in a background thread."""
-        uses_ollama = "ollama" in (
-            self.data.get("LLM_TEXT_PROVIDER", ""),
-            self.data.get("LLM_IMAGE_PROVIDER", ""),
-        )
-        self._ollama_pulled = _query_ollama_models() if uses_ollama else set()
-        self._load_codex_status()
-        self._mic_choices = list_microphone_choices()
-        self._spk_choices = list_speaker_choices()
+        self._ollama_pulled = set()
+        self._mic_choices = [("System default mic", "")]
+        self._spk_choices = [("System default output", "")]
+        self._init_codex_status_placeholder()
+
+        try:
+            uses_ollama = "ollama" in (
+                self.data.get("LLM_TEXT_PROVIDER", ""),
+                self.data.get("LLM_IMAGE_PROVIDER", ""),
+            )
+            if uses_ollama:
+                self._ollama_pulled = _query_ollama_models()
+        except Exception:
+            logger.exception("Failed to query Ollama models for settings UI.")
+
+        try:
+            self._mic_choices = list_microphone_choices()
+        except Exception:
+            logger.exception("Failed to load microphone choices for settings UI.")
+
+        try:
+            self._spk_choices = list_speaker_choices()
+        except Exception:
+            logger.exception("Failed to load speaker choices for settings UI.")
+
         try:
             self.root.after(0, self._finish_build)
         except Exception:
             pass
+
+    def _init_codex_status_placeholder(self):
+        """Set fast Codex defaults so OAuth probing does not block Settings."""
+        self._codex_available = find_codex_executable() is not None
+        self._codex_account = None
+        self._codex_error = ""
 
     def _load_codex_status(self):
         """Best-effort Codex CLI/OAuth detection for the settings UI."""
@@ -524,6 +547,8 @@ class SettingsWindow:
         self._build_hotkeys_panel()
         self._build_appearance_panel()
         self._switch_section("llm")
+        if self._codex_available:
+            self.root.after(100, self._refresh_codex_status)
 
     # ── Section switching ──────────────────────────────────────────────
 

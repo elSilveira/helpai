@@ -32,6 +32,34 @@ class AutoWhisperFlowTests(unittest.TestCase):
 
         self.assertNotIn("_capture_has_active_audio", called_names)
 
+    def test_auto_whisper_runs_for_each_changed_transcript_without_threshold_gates(self):
+        main_source = (ROOT / "main.py").read_text(encoding="utf-8")
+        run_auto = _function_node(main_source, "_run_auto_whisper")
+
+        called_attributes = {
+            node.func.attr
+            for node in ast.walk(run_auto)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+        }
+
+        self.assertIn("mark_if_changed", called_attributes)
+        self.assertNotIn("build_request_if_ready", called_attributes)
+        self.assertNotIn("retry_after_seconds", called_attributes)
+
+    def test_enabling_auto_whisper_schedules_current_transcript_check(self):
+        main_source = (ROOT / "main.py").read_text(encoding="utf-8")
+        toggle = _function_node(main_source, "_set_auto_whisper_enabled")
+
+        schedule_calls = [
+            node
+            for node in ast.walk(toggle)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "_schedule_auto_whisper"
+        ]
+
+        self.assertEqual(1, len(schedule_calls))
+
     def test_audio_shortcut_uses_same_whisper_request_and_analyzer_as_auto(self):
         main_source = (ROOT / "main.py").read_text(encoding="utf-8")
         audio_action = _function_node(main_source, "_action_audio_analysis")
